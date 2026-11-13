@@ -1,0 +1,289 @@
+{% extends "page.html" %}
+{% block title %}属性值{% endblock %}
+{% block body %}
+<div id="avPage">
+    <div id="avTypePanel">
+        <div id="avTypeGrid"></div>
+    </div>
+    <div id="avValuePanel">
+        <div id="avValueHeader">
+            <span id="avValueTitle">请先在左侧选择一个属性类型</span>
+        </div>
+        <div id="avValueEmpty">左侧选择类型后，在这里维护它的取值。币种的取值会用于供应商和产品目录。</div>
+        <div id="avValueGrid"></div>
+        <div id="avValueTree"></div>
+    </div>
+</div>
+<script>
+$(function () {
+    var selectedType = null;
+    var valueGrid = null;
+    var valueTree = null;
+    var channel = window.BroadcastChannel ? new BroadcastChannel('mzshop-supplier') : null;
+
+    function call(method, path, body) {
+        return $.ajax({
+            url: APP.HOST + path, method: method, contentType: 'application/json',
+            data: body === undefined ? undefined : JSON.stringify(body)
+        }).then(function (res) {
+            if (res.code !== 0) { return $.Deferred().reject(res.msg).promise(); }
+            return res.data;
+        }, function (xhr) {
+            if (xhr.status === 401) { (window.top || window).location.href = APP.HOST + '/login'; }
+            return $.Deferred().reject((xhr.responseJSON && xhr.responseJSON.msg) || xhr.statusText || '保存失败').promise();
+        });
+    }
+
+    function notifyCurrency() {
+        if (channel && selectedType && selectedType.code === 'currency') { channel.postMessage({ kind: 'currency' }); }
+    }
+
+    function extFieldsOf(schema) {
+        var fields = [];
+        (schema || []).forEach(function (group) {
+            (group.items || []).forEach(function (item) {
+                var type = item.type === 'input' ? 'number' : (item.type || 'text');
+                fields.push({
+                    field: item.field, caption: item.caption || item.field, type: type, required: !!item.required,
+                    min: item.min, max: item.max,
+                    minLength: item.minLength !== undefined ? item.minLength : 0,
+                    maxLength: item.maxLength !== undefined ? item.maxLength : 100
+                });
+            });
+        });
+        return fields;
+    }
+
+    function flatten(rows, fields) {
+        rows.forEach(function (row) {
+            var ext = row.ext_values || {};
+            fields.forEach(function (f) {
+                var v = ext[f.field];
+                row['ext__' + f.field] = (v !== undefined && v !== null) ? v : (f.type === 'checkbox' ? false : null);
+            });
+        });
+        return rows;
+    }
+
+    function collectExt(values, fields) {
+        var ext = {};
+        var has = false;
+        fields.forEach(function (f) {
+            var key = 'ext__' + f.field;
+            if (Object.prototype.hasOwnProperty.call(values, key)) {
+                ext[f.field] = values[key];
+                delete values[key];
+                has = true;
+            }
+        });
+        if (has) { values.ext_values = ext; }
+        if (Object.prototype.hasOwnProperty.call(values, 'code') && values.code === '') { values.code = null; }
+        if (Object.prototype.hasOwnProperty.call(values, 'parent_id') && !values.parent_id) { values.parent_id = null; }
+        return values;
+    }
+
+    function extColumn(f) {
+        var col = { dataField: 'ext__' + f.field, caption: f.caption };
+        var rules = [];
+        if (f.required) { rules.push({ type: 'required', message: '请填写' + f.caption }); }
+        if (f.type === 'integer' || f.type === 'number') {
+            col.dataType = 'number';
+            var range = { type: 'range' };
+            if (f.min !== undefined && f.min !== null) { range.min = f.min; }
+            if (f.max !== undefined && f.max !== null) { range.max = f.max; }
+            if (range.min !== undefined || range.max !== undefined) { rules.push(range); }
+            if (f.type === 'integer') {
+                col.editorOptions = { showSpinButtons: true, step: 1, format: '#0' };
+                rules.push({ type: 'custom', message: '请输入整数', validationCallback: function (e) {
+                    return e.value === null || e.value === undefined || Number.isInteger(Number(e.value));
+                } });
+            }
+        } else if (f.type === 'text') {
+            col.editorOptions = { maxLength: f.maxLength };
+            rules.push({ type: 'stringLength', max: f.maxLength, message: '最长 ' + f.maxLength + ' 个字符' });
+        } else {
+            col.dataType = 'boolean';
+        }
+        if (rules.length) { col.validationRules = rules; }
+        return col;
+    }
+
+    function baseColumns(type, fields, withParent) {
+        var cols = [];
+        if (withParent) {
+            cols.push({
+                dataField: 'parent_id', caption: '上级',
+                lookup: { dataSource: [], valueExpr: 'id', displayExpr: 'cn_name', allowClearing: true }
+            });
+        }
+        cols.push({ dataField: 'cn_name', caption: '中文名称', validationRules: [{ type: 'required', message: '请填写中文名称' }, { type: 'stringLength', max: 100, message: '最长 100 个字符' }] });
+        cols.push({ dataField: 'en_name', caption: '英文名称', validationRules: [{ type: 'stringLength', max: 100, message: '最长 100 个字符' }] });
+        if (type.use_code) {
+            var codeRules = [{ type: 'required', message: '请填写编码' }, { type: 'stringLength', max: 50, message: '最长 50 个字符' }];
+            if (type.code === 'currency') {
+                codeRules.push({ type: 'pattern', pattern: '^[A-Za-z]{3}$', message: '币种编码为 3 位英文，如 USD / CNY' });
+            }
+            cols.push({ dataField: 'code', caption: '编码', width: 110, validationRules: codeRules });
+        }
+        cols.push({ dataField: 'sort_order', caption: '排序', dataType: 'number', width: 80 });
+        cols.push({ dataField: 'status', caption: '启用', dataType: 'boolean', width: 70 });
+        fields.forEach(function (f) { cols.push(extColumn(f)); });
+        if (!withParent) { cols.push({ type: 'buttons', caption: '操作', width: 90, buttons: ['edit', 'delete'] }); }
+        return cols;
+    }
+
+    function disposeValue() {
+        if (valueGrid) { valueGrid.dispose(); valueGrid = null; }
+        if (valueTree) { valueTree.dispose(); valueTree = null; }
+        $('#avValueGrid').empty().hide();
+        $('#avValueTree').empty().hide();
+    }
+
+    function panelHeight() {
+        return Math.max(280, $('#avValuePanel').height() - $('#avValueHeader').outerHeight(true) - 4);
+    }
+
+    function selectType(type) {
+        selectedType = type;
+        var fields = extFieldsOf(type.ext_schema);
+        $('#avValueEmpty').hide();
+        $('#avValueTitle').text(type.cn_name + (type.en_name ? ' / ' + type.en_name : '') + '（' + type.code + '）');
+        disposeValue();
+        if (type.is_tree) { buildTree(type, fields); }
+        else { buildGrid(type, fields); }
+    }
+
+    function buildGrid(type, fields) {
+        $('#avValueGrid').show();
+        valueGrid = new DxGrid($('#avValueGrid')[0], {
+            dataSource: new DevExpress.data.CustomStore({
+                key: 'id',
+                load: function () {
+                    return call('GET', '/api/v1/attrs/values?type_id=' + type.id).then(function (rows) { return flatten(rows, fields); });
+                },
+                insert: function (values) {
+                    values.type_id = type.id;
+                    collectExt(values, fields);
+                    return call('POST', '/api/v1/attrs/values', values).then(function (row) { notifyCurrency(); return flatten([row], fields)[0]; });
+                },
+                update: function (key, values) {
+                    collectExt(values, fields);
+                    return call('PUT', '/api/v1/attrs/values/' + key, values).then(function () { notifyCurrency(); });
+                },
+                remove: function (key) {
+                    return call('DELETE', '/api/v1/attrs/values/' + key).then(function () { notifyCurrency(); });
+                }
+            }),
+            keyExpr: 'id',
+            height: panelHeight,
+            autoHeight: false,
+            editing: {
+                mode: 'popup', allowAdding: true, allowUpdating: true, allowDeleting: true, useIcons: true,
+                texts: {
+                    addRow: '新增属性值', editRow: '编辑', deleteRow: '删除', saveRowChanges: '保存', cancelRowChanges: '取消',
+                    confirmDeleteMessage: '确定删除该属性值吗？已被供应商或目录条目使用的币种不能删除'
+                },
+                popup: { title: type.cn_name, width: 560, height: 'auto', showTitle: true, showCloseButton: true, hideOnOutsideClick: false }
+            },
+            onInitNewRow: function (e) { e.data.status = true; e.data.sort_order = 0; e.data.code = ''; },
+            onRowDblClick: function (e) { if (e.rowType === 'data') { e.component.editRow(e.rowIndex); } },
+            columns: baseColumns(type, fields, false)
+        });
+    }
+
+    function buildTree(type, fields) {
+        $('#avValueTree').show();
+        call('GET', '/api/v1/attrs/values?type_id=' + type.id).then(function (rows) {
+            var nodes = flatten(rows, fields);
+            var columns = baseColumns(type, fields, true);
+            columns[0].lookup.dataSource = nodes;
+            valueTree = $('#avValueTree').dxTreeList({
+                dataSource: nodes,
+                keyExpr: 'id',
+                parentIdExpr: 'parent_id',
+                rootValue: null,
+                height: panelHeight(),
+                showBorders: true,
+                autoExpandAll: true,
+                columnAutoWidth: true,
+                hoverStateEnabled: true,
+                editing: {
+                    mode: 'popup', allowAdding: true, allowUpdating: true, allowDeleting: true, useIcons: true,
+                    texts: { addRow: '新增', confirmDeleteMessage: '确定删除该属性值吗？有下级时请先删除下级' },
+                    popup: { title: type.cn_name, width: 560, height: 'auto', showCloseButton: true }
+                },
+                toolbar: { items: ['addRowButton', 'revertButton'] },
+                columns: columns,
+                onInitNewRow: function (e) { e.data.status = true; e.data.sort_order = 0; },
+                onSaving: function (e) {
+                    if (!e.changes.length) { return; }
+                    e.cancel = true;
+                    var jobs = e.changes.map(function (change) {
+                        var vals = $.extend({}, change.data);
+                        collectExt(vals, fields);
+                        if (change.type === 'insert') {
+                            vals.type_id = type.id;
+                            return call('POST', '/api/v1/attrs/values', vals);
+                        }
+                        if (change.type === 'update') { return call('PUT', '/api/v1/attrs/values/' + change.key, vals); }
+                        if (change.type === 'remove') { return call('DELETE', '/api/v1/attrs/values/' + change.key); }
+                        return $.when();
+                    });
+                    $.when.apply($, jobs).done(function () { reloadTree(); }).fail(function (msg) {
+                        DevExpress.ui.notify(typeof msg === 'string' ? msg : '保存失败', 'error', 2500);
+                        reloadTree();
+                    });
+                }
+            }).dxTreeList('instance');
+
+            function reloadTree() {
+                call('GET', '/api/v1/attrs/values?type_id=' + type.id).then(function (fresh) {
+                    nodes = flatten(fresh, fields);
+                    valueTree.option('dataSource', nodes);
+                    valueTree.columnOption('parent_id', 'lookup.dataSource', nodes);
+                });
+            }
+        }, function (msg) { DevExpress.ui.notify(msg, 'error', 2500); });
+    }
+
+    var picked = false;
+    $('#avTypeGrid').dxDataGrid({
+        height: '100%',
+        keyExpr: 'id',
+        showBorders: true,
+        hoverStateEnabled: true,
+        focusedRowEnabled: true,
+        filterRow: { visible: true },
+        noDataText: '暂无属性类型',
+        columns: [
+            { dataField: 'cn_name', caption: '名称' },
+            { dataField: 'is_tree', caption: '树', dataType: 'boolean', width: 54 }
+        ],
+        onRowClick: function (e) { selectType(e.data); },
+        onContentReady: function (e) {
+            if (picked || !e.component.totalCount()) { return; }
+            var prefer = e.component.getVisibleRows().filter(function (r) { return r.data && r.data.code === 'currency'; })[0];
+            var row = prefer || e.component.getVisibleRows()[0];
+            if (!row) { return; }
+            picked = true;
+            e.component.option('focusedRowKey', row.key);
+            selectType(row.data);
+        }
+    });
+
+    call('GET', '/api/v1/attrs/types').then(function (rows) {
+        $('#avTypeGrid').dxDataGrid('instance').option('dataSource', rows);
+    }, function (msg) { DevExpress.ui.notify(msg, 'error', 2500); });
+});
+</script>
+<style>
+#avPage { display: flex; height: calc(100vh - 24px); gap: 10px; box-sizing: border-box; padding: 12px; }
+#avTypePanel { width: 240px; flex: 0 0 240px; min-height: 0; }
+#avTypeGrid { height: 100%; }
+#avValuePanel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#avValueHeader { flex: 0 0 auto; margin-bottom: 8px; }
+#avValueTitle { font-weight: 600; color: #0C6C9E; }
+#avValueEmpty { color: #888; margin: 24px 8px; }
+#avValueGrid, #avValueTree { flex: 1; min-height: 0; display: none; }
+</style>
+{% endblock %}

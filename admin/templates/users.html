@@ -1,0 +1,81 @@
+{% extends "page.html" %}
+{% block title %}用户管理{% endblock %}
+{% block body %}
+<div class="page-pad">
+    <div id="usersGrid"></div>
+</div>
+<script>
+$(function () {
+    var grid = new DxGrid($('#usersGrid')[0], {
+        dataSource: DxGrid.restStore('/api/v1/users', 'id'),
+        keyExpr: 'id',
+        hoverStateEnabled: true,
+        editing: {
+            mode: 'popup',
+            allowAdding: true,
+            allowUpdating: true,
+            allowDeleting: true,
+            useIcons: true,
+            texts: {
+                addRow: '新增用户',
+                editRow: '编辑',
+                deleteRow: '删除',
+                saveRowChanges: '保存',
+                cancelRowChanges: '取消',
+                confirmDeleteTitle: '删除用户',
+                confirmDeleteMessage: '确定删除该用户吗？删除后不可恢复'
+            },
+            popup: { title: '用户', width: 460, height: 'auto', showTitle: true },
+            form: { colCount: 1, labelLocation: 'left' }
+        },
+        onInitNewRow: function (e) { e.data.status = true; },
+        onRowDblClick: function (e) {
+            if (e.rowType === 'data') { e.component.editRow(e.rowIndex); }
+        },
+        onEditorPreparing: function (e) {
+            // 登录名创建后不可改
+            if (e.parentType === 'dataRow' && e.dataField === 'username' && !e.row.isNewRow) {
+                e.editorOptions.readOnly = true;
+            }
+            if (e.parentType === 'dataRow' && e.dataField === 'password' && e.row.isNewRow) {
+                e.editorOptions.placeholder = '请设置登录密码（至少 6 位）';
+            }
+        },
+        onToolbarPreparing: function (e) {
+            // 「新增用户」按钮是 editing.allowAdding 自带的：挪到最左边并始终显示文字，再补一个刷新
+            e.toolbarOptions.items.forEach(function (item) {
+                if (item.name === 'addRowButton') {
+                    item.showText = 'always';
+                    item.location = 'before';
+                    item.options = $.extend(item.options, { type: 'default', stylingMode: 'contained' });
+                }
+            });
+        },
+        onRowInserted: function () { DevExpress.ui.notify('用户已新增', 'success', 1800); },
+        onRowUpdated: function () { DevExpress.ui.notify('用户已保存', 'success', 1800); },
+        onRowRemoved: function () { DevExpress.ui.notify('用户已删除', 'success', 1800); },
+        columns: [
+            { dataField: 'id', caption: 'ID', width: 70, allowEditing: false, formItem: { visible: false } },
+            {
+                dataField: 'username', caption: '用户名',
+                validationRules: [{ type: 'required', message: '请输入用户名' }, { type: 'stringLength', max: 50, message: '最长 50 个字符' }]
+            },
+            { dataField: 'real_name', caption: '姓名' },
+            { dataField: 'email', caption: '邮箱', validationRules: [{ type: 'email', message: '邮箱格式不正确' }] },
+            { dataField: 'phone', caption: '手机' },
+            { dataField: 'status', caption: '启用', dataType: 'boolean', width: 80 },
+            {
+                dataField: 'password', caption: '密码', visible: false,
+                editorOptions: { mode: 'password', placeholder: '编辑时留空表示不修改' },
+                formItem: { visible: true },
+                validationRules: [{
+                    type: 'custom', message: '新增用户必须设置密码',
+                    validationCallback: function (o) { return o.data.id !== undefined || !!o.value; }
+                }, { type: 'stringLength', min: 6, ignoreEmptyValue: true, message: '密码至少 6 位' }]
+            },
+            { dataField: 'created_at', caption: '创建时间', allowEditing: false, formItem: { visible: false }, width: 160 }
+        ]
+    });
+});
+</script>
+{% endblock %}

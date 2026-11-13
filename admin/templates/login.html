@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>登录 - mzShop</title>
+<link rel="stylesheet" href="/static/css/login.css">
+<script>if (window.top !== window.self) { window.top.location.href = '/login'; }</script>
+</head>
+<body>
+<div class="login-stage">
+    <div class="login-panel">
+        <div class="login-brand"><i></i><b>mzShop</b></div>
+        <h1 class="login-title"><span>mzShop</span> 系统登录</h1>
+        <p class="login-welcome">E-commerce Data Platform</p>
+
+        {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+
+        <form method="post" action="/login/do" autocomplete="on">
+            <div class="login-field">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>
+                <input type="text" name="username" placeholder="用户名" autocomplete="username" required autofocus>
+            </div>
+            <div class="login-field">
+                <svg viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+                <input type="password" name="password" placeholder="密码" autocomplete="current-password" required>
+            </div>
+            <button type="submit" class="login-submit">登录</button>
+        </form>
+    </div>
+</div>
+</body>
+</html>

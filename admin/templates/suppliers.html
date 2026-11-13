@@ -1,0 +1,55 @@
+{% extends "page.html" %}
+{% block title %}供应商{% endblock %}
+{% block body %}
+<div class="page-pad">
+    <div id="supplierGrid"></div>
+</div>
+<script src="/static/js/lib/supplierCatalog.js"></script>
+<script>
+$(function () {
+    var grid = new DxGrid($('#supplierGrid')[0], {
+        dataSource: DxGrid.restStore('/api/v1/supplier-catalog/suppliers', 'id'),
+        keyExpr: 'id',
+        editing: {
+            mode: 'popup', allowAdding: true, allowUpdating: true, allowDeleting: true, useIcons: true,
+            texts: {
+                addRow: '新增供应商', editRow: '编辑', deleteRow: '删除', saveRowChanges: '保存', cancelRowChanges: '取消',
+                confirmDeleteMessage: '确定删除该供应商吗？其 Excel 导入模板会一并删除；已有目录条目时不能删除'
+            },
+            popup: { title: '供应商', width: 500, height: 'auto', showTitle: true },
+            form: {
+                colCount: 1, labelLocation: 'left',
+                items: ['name', 'website', 'contact_name', 'contact_phone', 'contact_email', 'default_currency', 'remark', 'status']
+            }
+        },
+        onInitNewRow: function (e) { e.data.status = true; },
+        onRowInserted: function () { DevExpress.ui.notify('供应商已新增', 'success', 1800); SUP.notifyChanged('supplier'); },
+        onRowUpdated: function () { DevExpress.ui.notify('供应商已保存', 'success', 1800); SUP.notifyChanged('supplier'); },
+        onRowRemoved: function () { DevExpress.ui.notify('供应商已删除', 'success', 1800); SUP.notifyChanged('supplier'); },
+        columns: [
+            { dataField: 'name', caption: '供应商名称', minWidth: 160, validationRules: [{ type: 'required', message: '请输入供应商名称' }] },
+            {
+                dataField: 'website', caption: '官网', width: 220, allowFiltering: false, allowSorting: false,
+                cellTemplate: function (el, o) {
+                    if (o.value) { $('<a class="cell-link" target="_blank"></a>').attr('href', o.value).text(o.value).appendTo(el); }
+                }
+            },
+            { dataField: 'contact_name', caption: '联系人', width: 90 },
+            { dataField: 'contact_phone', caption: '电话', width: 130 },
+            { dataField: 'contact_email', caption: '邮箱', width: 170 },
+            { dataField: 'default_currency', caption: '默认币种', width: 130,
+              lookup: { dataSource: SUP.currencySource(), valueExpr: 'code', displayExpr: 'label', allowClearing: true } },
+            { dataField: 'item_count', caption: '目录条目', dataType: 'number', width: 80, allowEditing: false, formItem: { visible: false } },
+            { dataField: 'has_mapping', caption: '导入模板', dataType: 'boolean', width: 80, allowEditing: false, formItem: { visible: false } },
+            { dataField: 'remark', caption: '备注', visible: false, width: 200 },
+            { dataField: 'status', caption: '启用', dataType: 'boolean', width: 70 },
+            { dataField: 'id', caption: 'ID', width: 60, allowEditing: false, formItem: { visible: false } },
+            { dataField: 'updated_at', caption: '更新时间', width: 150, allowEditing: false, formItem: { visible: false } },
+            { type: 'buttons', caption: '操作', width: 80, buttons: ['edit', 'delete'] }
+        ]
+    });
+    // 目录导入后刷新条目数
+    SUP.onChanged('catalog', function () { grid.refresh(); });
+});
+</script>
+{% endblock %}

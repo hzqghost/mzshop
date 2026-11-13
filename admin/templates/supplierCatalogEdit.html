@@ -1,0 +1,506 @@
+{% extends "page.html" %}
+{% block title %}产品详情{% endblock %}
+{% block body %}
+<div class="edit-bar">
+    <div class="edit-title" id="editTitle">产品详情</div>
+    <div class="edit-actions">
+        <div id="btnSave"></div>
+        <div id="btnClose"></div>
+    </div>
+</div>
+<div class="page-pad edit-body">
+    <div id="itemForm"></div>
+</div>
+<script src="/static/js/plugins/tinymce/tinymce.min.js"></script>
+<script src="/static/js/lib/shop.js"></script>
+<script src="/static/js/lib/supplierCatalog.js"></script>
+<script>
+var params = new URLSearchParams(location.search);
+var itemId = parseInt(params.get('id'), 10) || null;
+var TAB_URL = location.pathname + location.search;
+
+function closeSelf() {
+    discardFresh();
+    if (window.parent !== window && window.parent.AdminLayout) { window.parent.AdminLayout.closeTabByUrl(TAB_URL); }
+    else { window.close(); }
+}
+
+var FILE_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip';
+var IMAGE_ACCEPT = '.jpg,.jpeg,.png,.gif,.webp,image/jpeg,image/png,image/gif,image/webp';
+var IMAGE_EXT = { jpg: 1, jpeg: 1, png: 1, gif: 1, webp: 1 };
+var FILE_EXT = { pdf: 1, doc: 1, docx: 1, xls: 1, xlsx: 1, ppt: 1, pptx: 1, txt: 1, csv: 1, zip: 1 };
+/* 本地标记 → {file, url}。保存时只上传正文里还在的，关掉页面则全部丢掉 */
+var pendingFiles = {};
+/* 图片列表 / 附件列表里刚上传、还没随产品保存的地址。关掉页面时丢掉 */
+var freshUrls = [];
+var saving = false;
+
+function discardFresh() {
+    if (saving) { return; }
+    var urls = freshUrls.splice(0, freshUrls.length);
+    if (!urls.length) { return; }
+    var body = JSON.stringify({ urls: urls });
+    try {
+        navigator.sendBeacon(APP.HOST + '/api/v1/supplier-catalog/uploads/discard', new Blob([body], { type: 'application/json' }));
+    } catch (e) {
+        SUP.call('POST', '/uploads/discard', { urls: urls });
+    }
+}
+window.addEventListener('pagehide', discardFresh);
+
+function mediaList(raw) {
+    if (!Array.isArray(raw)) { return []; }
+    return raw.map(function (x) {
+        if (typeof x === 'string') { return { url: x, name: '' }; }
+        return { url: (x && x.url) || '', name: (x && x.name) || '' };
+    }).filter(function (x) { return x.url; });
+}
+
+var FILE_TYPE_ICONS = {
+    pdf: ['fa-file-pdf-o', '#d32f2f'],
+    doc: ['fa-file-word-o', '#1565c0'], docx: ['fa-file-word-o', '#1565c0'],
+    xls: ['fa-file-excel-o', '#2e7d32'], xlsx: ['fa-file-excel-o', '#2e7d32'], csv: ['fa-file-excel-o', '#2e7d32'],
+    ppt: ['fa-file-powerpoint-o', '#e65100'], pptx: ['fa-file-powerpoint-o', '#e65100'],
+    txt: ['fa-file-text-o', '#546e7a'],
+    zip: ['fa-file-archive-o', '#6d4c41'],
+    jpg: ['fa-file-image-o', '#00897b'], jpeg: ['fa-file-image-o', '#00897b'],
+    png: ['fa-file-image-o', '#00897b'], gif: ['fa-file-image-o', '#00897b'], webp: ['fa-file-image-o', '#00897b']
+};
+
+function fileTypeIcon(name) {
+    var ext = ((name || '').split('?')[0].split('.').pop() || '').toLowerCase();
+    var pair = FILE_TYPE_ICONS[ext] || ['fa-file-o', '#757575'];
+    return { ext: ext, cls: pair[0], color: pair[1] };
+}
+
+function mediaError(file, kind) {
+    var ext = ((file.name || '').split('.').pop() || '').toLowerCase();
+    if (kind === 'image' && !IMAGE_EXT[ext]) { return '图片列表只接受 jpg、png、gif、webp'; }
+    if (kind === 'file' && !FILE_EXT[ext]) { return '附件只接受 pdf、doc、docx、xls、xlsx、ppt、pptx、txt、csv、zip'; }
+    return localFileError(file);
+}
+
+function escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+}
+
+function uploadMaterial(file) {
+    var fd = new FormData();
+    fd.append('file', file, file.name || 'file');
+    return $.ajax({
+        url: APP.HOST + '/api/v1/supplier-catalog/uploads',
+        method: 'POST', data: fd, processData: false, contentType: false
+    }).then(function (res) {
+        if (res.code !== 0) { return $.Deferred().reject(res.msg).promise(); }
+        return res.data;
+    }, function (xhr) {
+        if (xhr.status === 401) { (window.top || window).location.href = APP.HOST + '/login'; }
+        return $.Deferred().reject((xhr.responseJSON && xhr.responseJSON.msg) || '上传失败').promise();
+    });
+}
+
+function namedFile(file) {
+    if (file.name && file.name.indexOf('.') > 0) { return file; }
+    var map = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' };
+    var ext = map[file.type] || 'bin';
+    return new File([file], 'paste.' + ext, { type: file.type });
+}
+
+function localFileError(file) {
+    var ext = ((file.name || '').split('.').pop() || '').toLowerCase();
+    var image = !!IMAGE_EXT[ext];
+    if (!image && !FILE_EXT[ext]) { return '仅支持图片（jpg/png/gif/webp）和文件（pdf/doc/docx/xls/xlsx/ppt/pptx/txt/csv/zip）'; }
+    if (!file.size) { return '文件是空的'; }
+    if (image && file.size > 8 * 1024 * 1024) { return '图片不能超过 8MB'; }
+    if (!image && file.size > 20 * 1024 * 1024) { return '文件不能超过 20MB'; }
+    return '';
+}
+
+function rememberFile(file) {
+    file = namedFile(file);
+    var err = localFileError(file);
+    if (err) { apiError(err); return null; }
+    var id = 'lf' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    var url = URL.createObjectURL(file);
+    var image = file.type.indexOf('image/') === 0 || !!IMAGE_EXT[((file.name || '').split('.').pop() || '').toLowerCase()];
+    pendingFiles[id] = { file: file, url: url };
+    return { id: id, url: url, name: file.name, image: image };
+}
+
+/* 先插本地预览。data-local 用来在保存时找回文件（编辑器会把 blob 地址换成 base64） */
+function insertLocal(editor, file) {
+    var rec = rememberFile(file);
+    if (!rec) { return; }
+    if (rec.image) {
+        editor.insertContent('<img src="' + rec.url + '" alt="' + escHtml(rec.name) + '" data-local="' + rec.id + '">');
+    } else {
+        editor.insertContent('<p><a href="' + rec.url + '" target="_blank" rel="noopener" data-local="' + rec.id + '">' + escHtml(rec.name) + '</a></p>');
+    }
+}
+
+/* 正文里还在的本地文件才上传，并换成服务器地址；已经删掉的只释放内存 */
+function flushPending(editor) {
+    var body = editor.getBody();
+    var nodes = body.querySelectorAll('[data-local]');
+    var kept = [];
+    for (var i = 0; i < nodes.length; i++) {
+        var id = nodes[i].getAttribute('data-local');
+        if (pendingFiles[id] && kept.indexOf(id) < 0) { kept.push(id); }
+    }
+    Object.keys(pendingFiles).forEach(function (id) {
+        if (kept.indexOf(id) < 0) {
+            URL.revokeObjectURL(pendingFiles[id].url);
+            delete pendingFiles[id];
+        }
+    });
+    var uploaded = [];
+    var chain = $.Deferred().resolve().promise();
+    kept.forEach(function (id) {
+        chain = chain.then(function () {
+            return uploadMaterial(pendingFiles[id].file).then(function (res) {
+                var els = editor.getBody().querySelectorAll('[data-local="' + id + '"]');
+                for (var n = 0; n < els.length; n++) {
+                    if (els[n].tagName === 'A') { els[n].setAttribute('href', res.url); }
+                    else { els[n].setAttribute('src', res.url); }
+                    els[n].removeAttribute('data-local');
+                }
+                URL.revokeObjectURL(pendingFiles[id].url);
+                delete pendingFiles[id];
+                uploaded.push(res.url);
+            });
+        });
+    });
+    return chain.then(function () { return uploaded; });
+}
+
+function discardUploads(urls) {
+    if (!urls.length) { return $.Deferred().resolve().promise(); }
+    return SUP.call('POST', '/uploads/discard', { urls: urls });
+}
+
+function filesFromClipboard(e) {
+    var cd = e.clipboardData || (e.originalEvent && e.originalEvent.clipboardData);
+    if (!cd) { return []; }
+    if (cd.files && cd.files.length) { return Array.prototype.slice.call(cd.files); }
+    var out = [];
+    if (cd.items) {
+        for (var i = 0; i < cd.items.length; i++) {
+            if (cd.items[i].kind === 'file') {
+                var f = cd.items[i].getAsFile();
+                if (f) { out.push(f); }
+            }
+        }
+    }
+    return out;
+}
+
+function pickMaterial(editor, accept) {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.onchange = function () {
+        if (input.files && input.files[0]) { insertLocal(editor, input.files[0]); }
+    };
+    input.click();
+}
+
+function initMaterialEditor(html) {
+    if (window.tinymce) { tinymce.remove('#remarkEditor'); }
+    tinymce.init({
+        selector: '#remarkEditor',
+        license_key: 'gpl',
+        language: 'zh-CN',
+        language_url: '/static/js/plugins/tinymce/langs/zh-CN.js',
+        height: 800,
+        min_height: 800,
+        menubar: false,
+        branding: false,
+        promotion: false,
+        statusbar: false,
+        toolbar_mode: 'wrap',
+        convert_urls: false,
+        extended_valid_elements: 'img[src|alt|width|height|style|class|data-local],a[href|target|rel|class|style|data-local]',
+        paste_data_images: false,
+        automatic_uploads: false,
+        images_file_types: 'jpg,jpeg,png,gif,webp',
+        plugins: 'advlist autolink lists link image table code wordcount fullscreen',
+        toolbar: 'undo redo | blocks | bold italic underline strikethrough | forecolor backcolor | alignleft aligncenter alignright alignjustify | bullist numlist | link uploadimage uploadfile table | removeformat code fullscreen',
+        content_style: 'body{font-family:"Microsoft YaHei",Arial,sans-serif;font-size:14px;} img{max-width:100%;height:auto;}',
+        setup: function (editor) {
+            editor.ui.registry.addButton('uploadimage', {
+                icon: 'image',
+                tooltip: '插入图片',
+                onAction: function () { pickMaterial(editor, IMAGE_ACCEPT); }
+            });
+            editor.ui.registry.addButton('uploadfile', {
+                text: '文件',
+                tooltip: '上传文件',
+                onAction: function () { pickMaterial(editor, FILE_ACCEPT); }
+            });
+            editor.on('paste', function (e) {
+                var files = filesFromClipboard(e);
+                if (!files.length) { return; }
+                e.preventDefault();
+                files.forEach(function (file) { insertLocal(editor, file); });
+            }, true);
+            editor.on('drop', function (e) {
+                var dt = e.dataTransfer;
+                if (!dt || !dt.files || !dt.files.length) { return; }
+                e.preventDefault();
+                Array.prototype.forEach.call(dt.files, function (file) { insertLocal(editor, file); });
+            }, true);
+            editor.on('init', function () {
+                if (html) { editor.setContent(html); }
+            });
+        }
+    });
+}
+
+$(function () {
+    var blank = {
+        supplier_id: null, supplier_sku: '', name: '', brand_id: 0, category_name: '', category_id: 0,
+        price: null, currency: '', stock: null, moq: '', status: 0, source_url: '',
+        images: [], attachments: [],
+        remark: '', source_type: 'manual', goods_id: 0
+    };
+    var load = itemId ? SUP.call('GET', '/items/' + itemId) : $.Deferred().resolve(blank).promise();
+    load.then(function (row) { build($.extend(blank, row)); }, function (msg) { apiError(msg); $('#itemForm').text('产品加载失败：' + msg); });
+});
+
+function build(data) {
+    var form, $images, $files;
+    data.images = mediaList(data.images);
+    data.attachments = mediaList(data.attachments);
+    if (data.main_image_url && !data.images.some(function (x) { return x.url === data.main_image_url; })) {
+        data.images.unshift({ url: data.main_image_url, name: '' });
+    }
+    setTitle();
+    $('#btnSave').dxButton({ text: '保存', type: 'default', stylingMode: 'contained', icon: 'save', onClick: save });
+    $('#btnClose').dxButton({ text: '关闭', onClick: closeSelf });
+
+    form = $('#itemForm').dxForm({
+        formData: data, colCount: 2, labelLocation: 'left', alignItemLabels: true,
+        items: [
+            { itemType: 'group', caption: '基本信息', colCount: 2, colSpan: 2, labelLocation: 'left', items: [
+                {
+                    dataField: 'supplier_id', label: { text: '供应商' }, editorType: 'dxSelectBox',
+                    validationRules: [{ type: 'required', message: '请选择供应商' }],
+                    editorOptions: { dataSource: SUP.supplierSource(), valueExpr: 'id', displayExpr: 'name', searchEnabled: true, placeholder: '请选择供应商' }
+                },
+                { dataField: 'supplier_sku', label: { text: '货号/SKU' }, validationRules: [{ type: 'required', message: '请输入货号/SKU' }, { type: 'stringLength', max: 100, message: '最长 100 个字符' }] },
+                { dataField: 'name', label: { text: '产品名称' }, colSpan: 2, validationRules: [{ type: 'required', message: '请输入产品名称' }, { type: 'stringLength', max: 300, message: '最长 300 个字符' }] },
+                {
+                    dataField: 'brand_id', label: { text: '品牌' }, editorType: 'dxSelectBox',
+                    editorOptions: { dataSource: SUP.brandSource('未知'), valueExpr: 'id', displayExpr: 'name', searchEnabled: true }
+                },
+                { dataField: 'category_name', label: { text: '供应商分类' }, validationRules: [{ type: 'stringLength', max: 200, message: '最长 200 个字符' }] },
+                {
+                    dataField: 'category_id', label: { text: '商品分类' }, editorType: 'dxSelectBox', colSpan: 2,
+                    editorOptions: { dataSource: Shop.categorySource('未映射'), valueExpr: 'id', displayExpr: 'full_name', searchEnabled: true }
+                },
+                { dataField: 'price', label: { text: '价格' }, editorType: 'dxNumberBox', editorOptions: { min: 0, format: '#,##0.00', showSpinButtons: false } },
+                {
+                    dataField: 'currency', label: { text: '币种' }, editorType: 'dxSelectBox',
+                    editorOptions: { dataSource: SUP.currencySource(), valueExpr: 'code', displayExpr: 'label', showClearButton: true, searchEnabled: true }
+                },
+                { dataField: 'stock', label: { text: '库存' }, editorType: 'dxNumberBox', editorOptions: { min: 0, format: '#,##0', showSpinButtons: false } },
+                { dataField: 'moq', label: { text: '起订量' }, validationRules: [{ type: 'stringLength', max: 50, message: '最长 50 个字符' }] },
+                {
+                    dataField: 'status', label: { text: '状态' }, editorType: 'dxSelectBox',
+                    editorOptions: { dataSource: SUP.STATUSES, valueExpr: 'value', displayExpr: 'text' }
+                },
+                { dataField: 'source_url', label: { text: '产品链接' }, colSpan: 2, validationRules: [{ type: 'stringLength', max: 500, message: '最长 500 个字符' }, { type: 'pattern', pattern: '^$|^https?://', message: '需以 http:// 或 https:// 开头' }] },
+                { label: { text: '图片列表' }, colSpan: 2, template: function (_, el) {
+                    $images = $('<div class="media-editor" tabindex="0"></div>').appendTo(el);
+                    bindDrop($images, 'image');
+                    renderImages();
+                } },
+                { label: { text: '附件列表' }, colSpan: 2, template: function (_, el) {
+                    $files = $('<div class="media-editor" tabindex="0"></div>').appendTo(el);
+                    bindDrop($files, 'file');
+                    renderFiles();
+                } }
+            ] },
+            { itemType: 'group', caption: '资料', colCount: 2, colSpan: 2, labelLocation: 'left', items: [
+                { label: { text: '资料' }, colSpan: 2, template: function (_, el) {
+                    $('<textarea id="remarkEditor"></textarea>').appendTo(el);
+                    initMaterialEditor(data.remark || '');
+                } }
+            ] }
+        ]
+    }).dxForm('instance');
+
+    function setTitle() {
+        $('#editTitle').text(itemId ? '编辑产品' + (data.name ? ' · ' + data.name : '') : '新增产品');
+    }
+
+    function listOf(kind) { return kind === 'image' ? data.images : data.attachments; }
+
+    function renderImages() {
+        $images.empty();
+        data.images.forEach(function (item, i) {
+            var $it = $('<div class="media-thumb"></div>').appendTo($images);
+            $('<img>').attr({ src: item.url, alt: item.name || '' }).appendTo($it);
+            if (i === 0) { $('<span class="media-main">主图</span>').appendTo($it); }
+            var $bar = $('<div class="media-ops"></div>').appendTo($it);
+            if (i > 0) {
+                $('<a href="javascript:;">主图</a>').on('click', function (e) {
+                    e.preventDefault();
+                    data.images.unshift(data.images.splice(i, 1)[0]);
+                    renderImages();
+                }).appendTo($bar);
+            }
+            $('<a href="javascript:;">删除</a>').on('click', function (e) {
+                e.preventDefault();
+                removeMedia('image', i);
+            }).appendTo($bar);
+        });
+        if (data.images.length < 20) {
+            $('<div class="media-add">上传</div>').on('click', function () { pickMedia('image'); }).appendTo($images);
+        }
+        $('<div class="media-hint"></div>').text('jpg、png、gif、webp，单张不超过 8MB。第一张是主图，可拖入或粘贴').appendTo($images);
+    }
+
+    function renderFiles() {
+        $files.empty();
+        data.attachments.forEach(function (item, i) {
+            var $row = $('<div class="media-file"></div>').appendTo($files);
+            var label = item.name || (item.url || '').split('/').pop() || '文件';
+            var icon = fileTypeIcon(label);
+            $('<i class="fa media-ficon"></i>').addClass(icon.cls).css('color', icon.color).attr('title', icon.ext).appendTo($row);
+            $('<a class="media-name" target="_blank" rel="noopener"></a>').attr('href', item.url).text(label).appendTo($row);
+            $('<a href="javascript:;" class="media-del">删除</a>').on('click', function (e) {
+                e.preventDefault();
+                removeMedia('file', i);
+            }).appendTo($row);
+        });
+        if (data.attachments.length < 20) {
+            $('<div class="media-add media-add-file">上传</div>').on('click', function () { pickMedia('file'); }).appendTo($files);
+        }
+        $('<div class="media-hint"></div>').text('pdf、doc、xls、ppt、txt、csv、zip，单个不超过 20MB，可拖入').appendTo($files);
+    }
+
+    function bindDrop($box, kind) {
+        $box.on('dragover', function (e) { e.preventDefault(); $box.addClass('is-drop'); });
+        $box.on('dragleave', function () { $box.removeClass('is-drop'); });
+        $box.on('drop', function (e) {
+            e.preventDefault();
+            $box.removeClass('is-drop');
+            var dt = e.originalEvent && e.originalEvent.dataTransfer;
+            if (dt && dt.files && dt.files.length) { addMedia(kind, dt.files); }
+        });
+        if (kind === 'image') {
+            $box.on('paste', function (e) {
+                var files = filesFromClipboard(e.originalEvent || e);
+                if (!files.length) { return; }
+                e.preventDefault();
+                addMedia('image', files);
+            });
+        }
+    }
+
+    function pickMedia(kind) {
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = true;
+        input.accept = kind === 'image' ? IMAGE_ACCEPT : FILE_ACCEPT;
+        input.onchange = function () { if (input.files && input.files.length) { addMedia(kind, input.files); } };
+        input.click();
+    }
+
+    function removeMedia(kind, index) {
+        var item = listOf(kind).splice(index, 1)[0];
+        if (item) {
+            var at = freshUrls.indexOf(item.url);
+            if (at >= 0) {
+                freshUrls.splice(at, 1);
+                SUP.call('POST', '/uploads/discard', { urls: [item.url] });
+            }
+        }
+        if (kind === 'image') { renderImages(); } else { renderFiles(); }
+    }
+
+    function addMedia(kind, fileList) {
+        var list = listOf(kind);
+        var room = 20 - list.length;
+        if (room <= 0) { apiError(kind === 'image' ? '图片最多 20 张' : '附件最多 20 个'); return; }
+        var files = Array.prototype.slice.call(fileList, 0, room);
+        var chain = $.Deferred().resolve().promise();
+        files.forEach(function (raw) {
+            chain = chain.then(function () {
+                var file = namedFile(raw);
+                var err = mediaError(file, kind);
+                if (err) { apiError(err); return; }
+                return uploadMaterial(file).then(function (res) {
+                    list.push({ url: res.url, name: res.name || file.name || '' });
+                    freshUrls.push(res.url);
+                    if (kind === 'image') { renderImages(); } else { renderFiles(); }
+                });
+            });
+        });
+        chain.fail(function (msg) { apiError(msg); });
+    }
+
+    function save() {
+        if (!form.validate().isValid) { return; }
+        var editor = window.tinymce && tinymce.get('remarkEditor');
+        var btn = $('#btnSave').dxButton('instance');
+        btn.option('disabled', true);
+        saving = true;
+        var fresh = [];
+        var ready = editor ? flushPending(editor) : $.Deferred().resolve([]).promise();
+        ready.then(function (urls) {
+            fresh = urls || [];
+            data.remark = editor ? editor.getContent() : (data.remark || '');
+            if (/blob:|data:image|data:application/i.test(data.remark) || editor.getBody().querySelector('[data-local]')) {
+                return $.Deferred().reject('资料里还有未上传的文件，请重新保存').promise();
+            }
+            var body = {
+                supplier_id: data.supplier_id, supplier_sku: data.supplier_sku, name: data.name,
+                brand_id: data.brand_id || 0, category_name: data.category_name || '', category_id: data.category_id || 0,
+                price: data.price === undefined ? null : data.price, currency: data.currency || '',
+                stock: data.stock === undefined ? null : data.stock, moq: data.moq || '',
+                status: data.status == null ? 0 : data.status, source_url: data.source_url || '',
+                images: data.images, attachments: data.attachments, remark: data.remark || ''
+            };
+            var creating = !itemId;
+            var req = creating ? SUP.call('POST', '/items', body) : SUP.call('PUT', '/items/' + itemId, body);
+            return req.then(function (res) {
+                fresh = [];
+                DevExpress.ui.notify('产品已保存', 'success', 1800);
+                SUP.notifyChanged('catalog');
+                if (creating) { itemId = res.id; }
+                freshUrls = [];
+                data.main_image_url = (data.images[0] && data.images[0].url) || '';
+                setTitle();
+            });
+        }).then(null, function (msg) {
+            return discardUploads(fresh).always(function () { apiError(msg); });
+        }).always(function () { saving = false; btn.option('disabled', false); });
+    }
+}
+</script>
+<style>
+.edit-bar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: #fff; border-bottom: 1px solid #e3e3e3; }
+.edit-title { font-size: 15px; font-weight: 600; }
+.edit-actions { display: flex; gap: 8px; }
+.edit-body { max-width: 1100px; }
+.tox-tinymce { border-radius: 4px; }
+.media-editor { width: 100%; box-sizing: border-box; border: 1px solid var(--fs-input-border, #ddd); border-radius: var(--fs-radius, 4px); background: var(--fs-input-bg, #fff); padding: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.media-editor.is-drop { border-color: var(--fs-input-focus, #1976d2); box-shadow: 0 0 0 1px var(--fs-input-focus, #1976d2); }
+.media-thumb, .media-add { width: 72px; height: 72px; border: 1px solid #e0e0e0; border-radius: 4px; position: relative; overflow: hidden; background: #fafafa; }
+.media-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.media-main { position: absolute; left: 0; top: 0; background: #1976d2; color: #fff; font-size: 11px; line-height: 16px; padding: 0 4px; }
+.media-ops { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.55); display: flex; justify-content: space-around; }
+.media-ops a, .media-del { color: #fff; font-size: 11px; text-decoration: none; }
+.media-add { display: flex; align-items: center; justify-content: center; color: #1976d2; cursor: pointer; border-style: dashed; background: #fff; }
+.media-add-file { width: auto; height: 28px; padding: 0 12px; }
+.media-file { display: flex; align-items: center; gap: 8px; width: 100%; border: 1px solid #e5e5e5; border-radius: 4px; padding: 4px 8px; background: #fff; box-sizing: border-box; }
+.media-ficon { flex: 0 0 16px; width: 16px; height: 16px; font-size: 16px; line-height: 16px; text-align: center; }
+.media-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-del { color: #c62828; flex: 0 0 auto; }
+.media-hint { flex: 1 0 100%; color: #888; font-size: 12px; line-height: 18px; }
+</style>
+{% endblock %}

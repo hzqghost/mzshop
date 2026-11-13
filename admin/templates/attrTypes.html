@@ -1,0 +1,64 @@
+{% extends "page.html" %}
+{% block title %}属性类型{% endblock %}
+{% block body %}
+<div class="page-pad">
+    <div id="attrTypeGrid"></div>
+</div>
+<script>
+$(function () {
+    var SCHEMA_PLACEHOLDER = '[\n  {\n    "group": "finance",\n    "caption": "财务属性",\n    "items": [\n      {"type": "number", "caption": "对人民币汇率", "field": "cny_rate", "min": 0}\n    ]\n  }\n]';
+    new DxGrid($('#attrTypeGrid')[0], {
+        dataSource: DxGrid.restStore('/api/v1/attrs/types', 'id'),
+        keyExpr: 'id',
+        editing: {
+            mode: 'popup', allowAdding: true, allowUpdating: true, allowDeleting: true, useIcons: true,
+            texts: {
+                addRow: '新增类型', editRow: '编辑', deleteRow: '删除', saveRowChanges: '保存', cancelRowChanges: '取消',
+                confirmDeleteMessage: '确定删除该属性类型吗？类型下还有属性值时不能删除；币种是系统预置类型，不能删除'
+            },
+            popup: { title: '属性类型', width: 640, height: 'auto', showTitle: true, showCloseButton: true, hideOnOutsideClick: false },
+            form: {
+                colCount: 1, labelLocation: 'left',
+                items: ['code', 'cn_name', 'en_name', 'is_tree', 'use_code', 'sort_order', {
+                    dataField: 'ext_schema_text', label: { text: '扩展字段 Schema（JSON）' }, editorType: 'dxTextArea',
+                    editorOptions: { height: 180, placeholder: SCHEMA_PLACEHOLDER }
+                }]
+            }
+        },
+        onInitNewRow: function (e) {
+            e.data.is_tree = false;
+            e.data.use_code = false;
+            e.data.sort_order = 0;
+            e.data.ext_schema_text = '';
+        },
+        onRowDblClick: function (e) {
+            if (e.rowType === 'data') { e.component.editRow(e.rowIndex); }
+        },
+        onRowInserted: function () { DevExpress.ui.notify('属性类型已新增', 'success', 1800); },
+        onRowUpdated: function () { DevExpress.ui.notify('属性类型已保存', 'success', 1800); },
+        onRowRemoved: function () { DevExpress.ui.notify('属性类型已删除', 'success', 1800); },
+        columns: [
+            { dataField: 'code', caption: '标识码', width: 140, validationRules: [
+                { type: 'required', message: '请填写标识码' },
+                { type: 'pattern', pattern: '^[A-Za-z][A-Za-z0-9_]{0,29}$', message: '字母开头，只能含字母、数字、下划线' }
+            ]},
+            { dataField: 'cn_name', caption: '中文名称', minWidth: 120, validationRules: [{ type: 'required', message: '请填写中文名称' }] },
+            { dataField: 'en_name', caption: '英文名称', width: 140 },
+            { dataField: 'is_tree', caption: '树型', dataType: 'boolean', width: 70 },
+            { dataField: 'use_code', caption: '用编码', dataType: 'boolean', width: 80 },
+            { dataField: 'sort_order', caption: '排序', dataType: 'number', width: 80 },
+            { dataField: 'value_count', caption: '属性值', dataType: 'number', width: 80, allowEditing: false, formItem: { visible: false } },
+            { dataField: 'ext_schema_text', caption: '扩展字段', visible: false, showInColumnChooser: false,
+              validationRules: [{ type: 'custom', message: '扩展字段 Schema 不是合法的 JSON', validationCallback: function (o) {
+                  var v = String(o.value || '').trim();
+                  if (!v) { return true; }
+                  try { return Array.isArray(JSON.parse(v)); } catch (e) { return false; }
+              } }] },
+            { dataField: 'id', caption: 'ID', width: 60, allowEditing: false, formItem: { visible: false } },
+            { dataField: 'updated_at', caption: '更新时间', width: 150, allowEditing: false, formItem: { visible: false } },
+            { type: 'buttons', caption: '操作', width: 90, buttons: ['edit', 'delete'] }
+        ]
+    });
+});
+</script>
+{% endblock %}

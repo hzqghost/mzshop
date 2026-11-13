@@ -1,0 +1,540 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    font-family: "Microsoft YaHei", Arial, sans-serif;
+    font-size: 14px;
+    overflow: hidden;
+}
+
+#appShell {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+}
+
+/* ---------- 左侧菜单 ---------- */
+
+/* 侧栏色调：默认夜晚，加 .light 切换为白天 */
+#sidebar {
+    --sb-bg: #1c2b4a;
+    --sb-text: #cfd6e4;
+    --sb-head-bg: #16213c;
+    --sb-head-text: #fff;
+    --sb-sub-bg: #16213c;
+    --sb-hover-bg: #2a3c63;
+    --sb-hover-text: #fff;
+    --sb-group: #f0a830;
+    --sb-accent: #f0a830;
+    --sb-thumb: rgba(255, 255, 255, 0.22);
+    --sb-thumb-hover: rgba(255, 255, 255, 0.4);
+    width: 150px;
+    flex-shrink: 0;
+    background: var(--sb-bg);
+    color: var(--sb-text);
+    display: flex;
+    flex-direction: column;
+    transition: width 0.2s ease;
+    overflow: hidden;
+}
+
+#sidebar.light {
+    --sb-bg: #f5f7fb;
+    --sb-text: #333;
+    --sb-head-bg: #e8edf5;
+    --sb-head-text: #333;
+    --sb-sub-bg: #eaeff7;
+    --sb-hover-bg: #dce5f3;
+    --sb-hover-text: #333;
+    --sb-group: #333;
+    --sb-accent: #e08e0b;
+    --sb-thumb: rgba(0, 0, 0, 0.2);
+    --sb-thumb-hover: rgba(0, 0, 0, 0.35);
+    border-right: 1px solid #dde3ee;
+}
+
+#appShell.collapsed #sidebar {
+    width: 56px;
+}
+
+#sidebarHeader {
+    height: 56px;
+    line-height: 56px;
+    padding: 0 16px;
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--sb-head-text);
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    background: var(--sb-head-bg);
+    display: flex;
+    align-items: center;
+}
+
+#sidebarHeader .theme-toggle {
+    margin-left: auto;
+    width: 26px;
+    height: 26px;
+    line-height: 26px;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 15px;
+    color: var(--sb-group);
+}
+
+#sidebarHeader .theme-toggle svg {
+    display: block;
+    margin: 5px;
+}
+
+#sidebarHeader .theme-toggle:hover {
+    background: var(--sb-hover-bg);
+}
+
+#appShell.collapsed #sidebarHeader .theme-toggle {
+    display: none;
+}
+
+#sidebarHeader .fa {
+    width: 20px;
+    text-align: center;
+    margin-right: 8px;
+}
+
+#sidebarMenu {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    flex: 1;
+}
+
+/* 侧栏滚动条：细、无上下箭头、轨道透明紧贴边缘（Chrome 121+ 设了 scrollbar-width 会忽略 ::-webkit-scrollbar，所以 Firefox 单独走 @supports） */
+#sidebarMenu::-webkit-scrollbar {
+    width: 5px;
+}
+
+#sidebarMenu::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+}
+
+#sidebarMenu::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#sidebarMenu::-webkit-scrollbar-thumb {
+    background: var(--sb-thumb);
+    border-radius: 3px;
+}
+
+#sidebarMenu::-webkit-scrollbar-thumb:hover {
+    background: var(--sb-thumb-hover);
+}
+
+@supports not selector(::-webkit-scrollbar) {
+    #sidebarMenu {
+        scrollbar-width: thin;
+        scrollbar-color: var(--sb-thumb) transparent;
+    }
+}
+
+.menu-group-title {
+    padding: 12px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    color: var(--sb-group);
+    display: flex;
+    align-items: center;
+}
+
+.menu-group-title .fa:first-child {
+    width: 20px;
+    text-align: center;
+    margin-right: 6px;
+}
+
+.menu-group-title .menu-caret {
+    margin-left: auto;
+    transition: transform 0.2s ease;
+    font-size: 12px;
+}
+
+.menu-group:not(.open) > .menu-group-title .menu-caret {
+    color: #999999;
+}
+
+.menu-group.open > .menu-group-title .menu-caret {
+    transform: rotate(180deg);
+}
+
+.menu-root {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.menu-children {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.2s ease;
+    background: var(--sb-sub-bg);
+}
+
+.menu-group.open > .menu-children {
+    max-height: 1000px;
+}
+
+/* 子菜单层级越深，缩进越多；多级嵌套时父级的 padding 会叠加，这里再额外加一点 */
+.menu-children .menu-group-title {
+    padding-left: 28px;
+}
+
+.menu-children .menu-item {
+    padding-left: 44px;
+}
+
+.menu-item {
+    padding: 10px 6px 10px 32px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--sb-text);
+}
+
+.menu-item:hover,
+.menu-item.active {
+    background: var(--sb-hover-bg);
+    color: var(--sb-hover-text);
+}
+
+/* 当前菜单项左侧一条强调线（取菜单分组标题的金黄色） */
+.menu-item.active {
+    box-shadow: inset 3px 0 0 var(--sb-accent);
+}
+
+#appShell.collapsed .menu-text,
+#appShell.collapsed #sidebarHeader span.logo-text {
+    display: none;
+}
+
+#appShell.collapsed .menu-group-title .menu-caret {
+    display: none;
+}
+
+#appShell.collapsed .menu-children {
+    max-height: 0 !important;
+}
+
+/* 收缩状态下鼠标移到菜单图标时的文本提示（挂在 body 上，避开侧栏 overflow:hidden） */
+#menuTip {
+    position: fixed;
+    transform: translateY(-50%);
+    padding: 5px 10px;
+    background: #16213c;
+    color: #fff;
+    font-size: 12px;
+    border-radius: 3px;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    pointer-events: none;
+    display: none;
+    z-index: 3000;
+}
+
+#menuTip.show {
+    display: block;
+}
+
+/* ---------- 主区域 ---------- */
+
+#main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+#tabBar {
+    height: 40px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    background: #f0f2f5;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 0 8px;
+}
+
+#tabBar .icon-btn {
+    width: 32px;
+    height: 32px;
+    line-height: 32px;
+    text-align: center;
+    cursor: pointer;
+    color: #555;
+    flex-shrink: 0;
+}
+
+#tabBar .icon-btn:hover {
+    background: #e4e8ee;
+}
+
+#tabs {
+    flex: 1;
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    height: 100%;
+    align-items: center;
+}
+
+/* 标签栏横向滚动条：同侧栏，细、无箭头、轨道透明（浅色底用深色半透明滑块） */
+#tabs::-webkit-scrollbar {
+    height: 5px;
+}
+
+#tabs::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+}
+
+#tabs::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#tabs::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 3px;
+}
+
+#tabs::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.45);
+}
+
+@supports not selector(::-webkit-scrollbar) {
+    #tabs {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 0, 0, 0.25) transparent;
+    }
+}
+
+.tab-item {
+    display: flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 14px;
+    margin-right: 2px;
+    background: transparent;
+    color: #616161;
+    cursor: pointer;
+    white-space: nowrap;
+    border-radius: 6px 6px 0 0;
+    flex-shrink: 0;
+    font-size: 13px;
+}
+
+.tab-item .fa {
+    margin-right: 6px;
+}
+
+/* 零件 / 商品详情标签的圆形图标：底色区分类型，图标白色 */
+.tab-item .tab-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    margin-right: 6px;
+    border-radius: 50%;
+    color: #fff;
+    font-size: 10px;
+    flex-shrink: 0;
+}
+
+.tab-item .tab-dot .fa {
+    margin-right: 0;
+}
+
+.tab-dot-part { background: #1f9d8b; }
+.tab-dot-pro { background: #7a5cc7; }
+
+/* 标题可能是业务数据（数据单标题、零件号），长了会把别的标签挤出可视区：
+ * 这里按像素截断（中英文混排按字数截宽度参差不齐），完整标题挂在 .tab-item 的 title 属性上
+ */
+.tab-title {
+    display: inline-block;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: middle;
+}
+
+/* 当前标签给宽一点：正在看的这个最需要看全 */
+.tab-item.active .tab-title {
+    max-width: 240px;
+}
+
+.tab-item.active {
+    background: #fff;
+    color: #0C6C9E;
+    font-weight: 600;
+    box-shadow: 0 -2px 0 #0C6C9E inset;
+}
+
+.tab-item.dragging {
+    opacity: .7;
+}
+
+/* 拖动中：别选中标题文字，iframe 也盖住，鼠标滑到内容区上还收得到 mousemove */
+body.tabs-dragging {
+    user-select: none;
+}
+
+body.tabs-dragging .tab-pane iframe {
+    pointer-events: none;
+}
+
+/* 只有当前标签显示关闭图标，其它标签右键菜单里关 */
+.tab-close {
+    display: none;
+    margin-left: 8px;
+    color: #999;
+}
+
+.tab-item.active .tab-close {
+    display: inline;
+}
+
+.tab-close:hover {
+    color: #d33;
+}
+
+#tabBarRight {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-left: auto;
+    position: relative;
+}
+
+#notifyBadge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    background: #f5862a;
+    color: #fff;
+    border-radius: 8px;
+    font-size: 10px;
+    line-height: 14px;
+    min-width: 14px;
+    text-align: center;
+    padding: 0 2px;
+}
+
+.toolbar-dropdown {
+    position: relative;
+}
+
+.toolbar-dropdown-label {
+    height: 40px;
+    line-height: 40px;
+    padding: 0 10px;
+    cursor: pointer;
+    color: #555;
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+}
+
+.toolbar-dropdown-label:hover {
+    background: #dde2ea;
+}
+
+.dropdown-menu {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 40px;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    min-width: 140px;
+    z-index: 1000;
+}
+
+.toolbar-dropdown.open .dropdown-menu {
+    display: block;
+}
+
+/* 标签右键菜单：跟随鼠标，坐标由 JS 设置 */
+#tabContextMenu {
+    position: fixed;
+    right: auto;
+    top: 0;
+    left: 0;
+    font-size: 12px;
+}
+
+#tabContextMenu.open {
+    display: block;
+}
+
+.dropdown-menu > div {
+    padding: 8px 14px;
+    cursor: pointer;
+    color: #333;
+}
+
+.dropdown-menu > div:hover {
+    background: #f0f2f5;
+}
+
+/* 菜单里的分隔线 */
+.dropdown-menu > div.menu-sep {
+    height: 0;
+    padding: 0;
+    margin: 4px 0;
+    border-top: 1px solid #e5e7eb;
+    cursor: default;
+}
+
+.dropdown-menu > div.menu-sep:hover {
+    background: transparent;
+}
+
+/* ---------- 内容区 ---------- */
+
+#contentArea {
+    flex: 1;
+    position: relative;
+    background: #f5f7f8;
+}
+
+.tab-pane {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: none;
+}
+
+.tab-pane.active {
+    display: block;
+}
+
+.tab-pane iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+}

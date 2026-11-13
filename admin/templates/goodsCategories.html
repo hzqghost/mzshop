@@ -1,0 +1,82 @@
+{% extends "page.html" %}
+{% block title %}商品分类{% endblock %}
+{% block body %}
+<div class="page-pad">
+    <div id="catTree"></div>
+</div>
+<script src="/static/js/lib/shop.js"></script>
+<script>
+/* 树形表格：用 DevExtreme 的 dxTreeList（DxGrid 是 dataGrid 的子类，不支持树），外观选项复用 DxGrid.styleOptions() 保持和其它表格一致 */
+$(function () {
+    Shop.ready.then(function () {
+        var tree = $('#catTree').dxTreeList($.extend({}, DxGrid.styleOptions(), DxGrid.treeOptions(), {
+            dataSource: DxGrid.restStore('/api/v1/shop/categories', 'id'),
+            keyExpr: 'id',
+            parentIdExpr: 'parent_id',
+            rootValue: 0,
+            autoExpandAll: true,
+            showBorders: true,
+            columnAutoWidth: true,
+            allowColumnResizing: true,
+            searchPanel: { visible: true, width: 240, placeholder: '搜索分类...' },
+            height: function () { return DxGrid.autoHeight('#catTree'); },
+            paging: { enabled: false },
+            pager: { visible: false },
+            noDataText: '暂无分类',
+            editing: {
+                mode: 'popup', allowAdding: true, allowUpdating: true, allowDeleting: true, useIcons: true,
+                texts: {
+                    addRow: '新增分类', addRowToNode: '新增子级', editRow: '编辑', deleteRow: '删除', saveRowChanges: '保存', cancelRowChanges: '取消',
+                    confirmDeleteTitle: '删除分类',
+                    confirmDeleteMessage: '确定删除该分类吗？该分类下的属性定义会一并删除；有子分类或商品时不能删除'
+                },
+                popup: { title: '商品分类', width: 460, height: 'auto', showTitle: true },
+                form: { colCount: 1, labelLocation: 'left', items: ['name'].concat(Shop.langItems('name'), ['parent_id', 'sort_order', 'status']) }
+            },
+            onInitNewRow: function (e) {
+                if (e.data.parent_id === undefined) { e.data.parent_id = 0; }  // 「新增子级」时树组件已把 parent_id 设成当前节点
+                e.data.sort_order = 0; e.data.status = true;
+            },
+            onRowDblClick: function (e) { if (e.rowType === 'data') { e.component.editRow(e.rowIndex); } },
+            onToolbarPreparing: function (e) {
+                e.toolbarOptions.items.forEach(function (item) {
+                    if (item.name === 'addRowButton') {
+                        item.showText = 'always'; item.location = 'before';
+                        item.options = $.extend(item.options, { type: 'default', stylingMode: 'contained' });
+                    }
+                });
+                e.toolbarOptions.items.push({
+                    location: 'before', widget: 'dxButton',
+                    options: { text: '刷新', icon: 'refresh', onClick: function () { tree.refresh(); } }
+                }, {
+                    location: 'before', widget: 'dxButton',
+                    options: { text: '展开全部', onClick: function () { tree.option('autoExpandAll', true); tree.refresh(); } }
+                }, {
+                    location: 'before', widget: 'dxButton',
+                    options: { text: '收起全部', onClick: function () { tree.option('autoExpandAll', false); tree.option('expandedRowKeys', []); tree.refresh(); } }
+                });
+            },
+            onRowInserted: function () { DevExpress.ui.notify('分类已新增', 'success', 1800); },
+            onRowUpdated: function () { DevExpress.ui.notify('分类已保存', 'success', 1800); },
+            onRowRemoved: function () { DevExpress.ui.notify('分类已删除', 'success', 1800); },
+            columns: Shop.withLang([
+                {
+                    dataField: 'name', caption: '分类名称', minWidth: 220,
+                    validationRules: [{ type: 'required', message: '请输入分类名称' }, { type: 'stringLength', max: 100, message: '最长 100 个字符' }]
+                },
+                {
+                    dataField: 'parent_id', caption: '上级分类', visible: false,
+                    lookup: { dataSource: Shop.categorySource('顶级分类'), valueExpr: 'id', displayExpr: 'full_name' }
+                },
+                { dataField: 'sort_order', caption: '排序', dataType: 'number', width: 80, sortOrder: 'asc', sortIndex: 0 },
+                { dataField: 'status', caption: '启用', dataType: 'boolean', width: 80 },
+                { dataField: 'id', caption: 'ID', width: 70, allowEditing: false, formItem: { visible: false } },
+                { dataField: 'created_at', caption: '创建时间', width: 160, allowEditing: false, formItem: { visible: false } },
+                { type: 'buttons', width: 100, buttons: ['add', 'edit', 'delete'] }
+            ], 'name', Shop.langColumns('name', '分类名称'))
+        })).dxTreeList('instance');
+        $(window).on('resize', function () { tree.updateDimensions(); });
+    });
+});
+</script>
+{% endblock %}

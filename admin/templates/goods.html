@@ -1,0 +1,106 @@
+{% extends "page.html" %}
+{% block title %}商品列表{% endblock %}
+{% block body %}
+<div class="page-pad">
+    <div id="goodsGrid"></div>
+</div>
+<script src="/static/js/lib/shop.js"></script>
+<script>
+var grid;
+
+/* 商品详情在框架的内容标签页里打开（同一个商品重复点击会切到已打开的标签） */
+function openGoods(id, name) {
+    if (id) { openAdminTab('/goodsEdit?id=' + id, '商品 · ' + (name || id)); }
+    else { openAdminTab('/goodsEdit', '新增商品'); }
+}
+
+$(function () {
+    Shop.ready.then(function () {
+        var ro = { allowEditing: false };
+        grid = new DxGrid($('#goodsGrid')[0], {
+            dataSource: DxGrid.remoteStore('/api/v1/shop/goods', 'id'),
+            keyExpr: 'id',
+            // 服务端分页 / 筛选 / 排序；表头筛选需要服务端按列去重取值，这里不提供，用筛选行代替
+            remoteOperations: { paging: true, filtering: true, sorting: true },
+            headerFilter: { visible: false },
+            // 批量上架 / 下架：一次请求更新勾选的全部商品
+            batchActions: [
+                {
+                    id: 'on', text: '批量上架', confirm: '确定上架选中的 {n} 个商品吗？', successText: '已上架',
+                    run: function (ids) { return Shop.call('POST', '/goods/batch-status', { ids: ids, status: true }); }
+                },
+                {
+                    id: 'off', text: '批量下架', confirm: '确定下架选中的 {n} 个商品吗？', successText: '已下架',
+                    run: function (ids) { return Shop.call('POST', '/goods/batch-status', { ids: ids, status: false }); }
+                }
+            ],
+            // 批量删除：逐个删，并关掉对应的详情标签
+            batchDelete: function (id) {
+                return Shop.call('DELETE', '/goods/' + id).then(function () {
+                    if (window.parent !== window && window.parent.AdminLayout) { window.parent.AdminLayout.closeTabByUrl('/goodsEdit?id=' + id); }
+                });
+            },
+            masterDetail: { enabled: true, template: function (el, info) {
+                $('<div class="sku-title">规格（SKU）</div>').appendTo(el);
+                Shop.skuGrid(el, info.key);
+            } },
+            onRowDblClick: function (e) { if (e.rowType === 'data') { openGoods(e.data.id, e.data.name); } },
+            onToolbarPreparing: function (e) {
+                e.toolbarOptions.items.push({
+                    location: 'before', widget: 'dxButton',
+                    options: { text: '新增商品', icon: 'add', type: 'default', stylingMode: 'contained', onClick: function () { openGoods(null); } }
+                });
+            },
+            columns: Shop.withLang([
+                $.extend({ dataField: 'id', caption: 'ID', width: 60 }, ro),
+                {
+                    dataField: 'main_image_url', caption: '主图', width: 70, allowFiltering: false, allowSorting: false,
+                    cellTemplate: function (el, o) { if (o.value) { $('<img class="thumb">').attr('src', o.value).appendTo(el); } }
+                },
+                { dataField: 'goods_no', caption: '商品编码', width: 130 },
+                { dataField: 'name', caption: '商品名称', minWidth: 220 },
+                { dataField: 'category_id', caption: '分类', width: 160, lookup: { dataSource: Shop.categorySource('未分类'), valueExpr: 'id', displayExpr: 'full_name' } },
+                { dataField: 'brand_id', caption: '品牌', width: 120, lookup: { dataSource: Shop.brandSource('未设置'), valueExpr: 'id', displayExpr: 'name' } },
+                { dataField: 'brand', caption: '品牌（原文）', width: 100, visible: false },
+                { dataField: 'cost_price', caption: '拿货价', dataType: 'number', format: '#,##0.00', width: 90 },
+                { dataField: 'sale_price', caption: '销售价', dataType: 'number', format: '#,##0.00', width: 90 },
+                { dataField: 'shipping_fee', caption: '运费', dataType: 'number', format: '#,##0.00', width: 80 },
+                { dataField: 'profit', caption: '利润', dataType: 'number', format: '#,##0.00', width: 80,
+                  cellTemplate: function (el, o) { el.text(Shop.money(o.value)).toggleClass('neg', o.value < 0); } },
+                { dataField: 'margin_pct', caption: '毛利率', dataType: 'number', width: 80,
+                  cellTemplate: function (el, o) { el.text(o.value === null ? '-' : o.value + '%').toggleClass('neg', o.value !== null && o.value < 0); } },
+                { dataField: 'sku_count', caption: '规格数', dataType: 'number', width: 70 },
+                { dataField: 'stock', caption: '总库存', dataType: 'number', width: 80 },
+                { dataField: 'status', caption: '上架', dataType: 'boolean', width: 70 },
+                { dataField: 'supplier', caption: '供应商', width: 110, visible: false },
+                { dataField: 'updated_at', caption: '更新时间', width: 150 },
+                {
+                    type: 'buttons', caption: '操作', width: 80,
+                    buttons: [
+                        { icon: 'edit', hint: '编辑', onClick: function (e) { openGoods(e.row.data.id, e.row.data.name); } },
+                        {
+                            icon: 'trash', hint: '删除', onClick: function (e) {
+                                DevExpress.ui.dialog.confirm('确定删除商品「' + e.row.data.name + '」吗？其图片和规格会一并删除，不可恢复', '删除商品').then(function (yes) {
+                                    if (!yes) { return; }
+                                    Shop.call('DELETE', '/goods/' + e.row.data.id).then(function () {
+                                        DevExpress.ui.notify('商品已删除', 'success', 1800); grid.refresh();
+                                        if (window.parent !== window && window.parent.AdminLayout) { window.parent.AdminLayout.closeTabByUrl('/goodsEdit?id=' + e.row.data.id); }
+                                    }, apiError);
+                                });
+                            }
+                        }
+                    ]
+                }
+            ], 'name', Shop.langColumns('name', '商品名称'))
+        });
+        // 详情页保存 / SKU 变动后刷新列表
+        Shop.onChanged('goods', function () { grid.refresh(); });
+    });
+});
+</script>
+<style>
+.thumb { width: 40px; height: 40px; object-fit: contain; display: block; }
+.neg { color: #d9363e; }
+.sku-title { font-weight: 600; margin: 6px 0; }
+</style>
+{% endblock %}

@@ -1,0 +1,282 @@
+{% extends "page.html" %}
+{% block title %}商品详情{% endblock %}
+{% block body %}
+<div class="edit-bar">
+    <div class="edit-title" id="editTitle">商品详情</div>
+    <div class="edit-actions">
+        <div id="btnSave"></div>
+        <div id="btnClose"></div>
+    </div>
+</div>
+<div class="page-pad edit-body">
+    <div id="goodsForm"></div>
+    <div id="skuSection" class="sku-section"></div>
+</div>
+<script src="/static/js/lib/shop.js"></script>
+<script>
+var params = new URLSearchParams(location.search);
+var goodsId = parseInt(params.get('id'), 10) || null;
+var TAB_URL = location.pathname + location.search;   // 与列表打开本标签时的地址一致，关闭自己时要用
+
+function closeSelf() {
+    if (window.parent !== window && window.parent.AdminLayout) { window.parent.AdminLayout.closeTabByUrl(TAB_URL); }
+    else { window.close(); }
+}
+
+$(function () {
+    Shop.ready.then(function () {
+        var data = { status: false, cost_price: 0, sale_price: 0, shipping_fee: 0, category_id: 0, brand_id: 0, attr_values: {}, images: [], i18n: Shop.blankI18n(['name', 'description', 'attr_values']) };
+        var load = goodsId ? Shop.call('GET', '/goods/' + goodsId) : $.Deferred().resolve(data).promise();
+        load.then(function (g) { build($.extend(data, g)); }, function (msg) { apiError(msg); $('#goodsForm').text('商品加载失败：' + msg); });
+    });
+});
+
+function build(data) {
+    // 之后才新增的语言补上空译文，保证表单能绑定
+    data.i18n = data.i18n || {};
+    Shop.langs.forEach(function (l) {
+        data.i18n[l.code] = $.extend({ name: '', description: '', attr_values: {} }, data.i18n[l.code]);
+    });
+    var form, $attrBox, $profit, $images;
+    setTitle();
+
+    $('#btnSave').dxButton({ text: '保存', type: 'default', stylingMode: 'contained', icon: 'save', onClick: save });
+    $('#btnClose').dxButton({ text: '关闭', onClick: closeSelf });
+
+    form = $('#goodsForm').dxForm({
+        formData: data, colCount: 2, labelLocation: 'top', showColonAfterLabel: false,
+        items: [
+            { itemType: 'group', caption: '基本信息', colCount: 2, colSpan: 2, items: [
+                { dataField: 'goods_no', label: { text: '商品编码' }, validationRules: [{ type: 'required', message: '请输入商品编码' }, { type: 'stringLength', max: 64, message: '最长 64 个字符' }] },
+                { dataField: 'name', label: { text: '商品名称' }, validationRules: [{ type: 'required', message: '请输入商品名称' }, { type: 'stringLength', max: 200, message: '最长 200 个字符' }] },
+                ...Shop.langs.map(function (l) {
+                    return { dataField: 'i18n.' + l.code + '.name', label: { text: '商品名称 (' + l.code + ')' }, validationRules: [{ type: 'stringLength', max: 200, message: '最长 200 个字符' }] };
+                }),
+                {
+                    dataField: 'category_id', label: { text: '分类（仅末级）' }, editorType: 'dxSelectBox',
+                    editorOptions: {
+                        dataSource: Shop.leafCategorySource('未分类'), valueExpr: 'id', displayExpr: 'full_name', searchEnabled: true,
+                        onValueChanged: function () { renderAttrs(); }
+                    }
+                },
+                {
+                    dataField: 'brand_id', label: { text: '品牌' }, editorType: 'dxSelectBox',
+                    editorOptions: {
+                        dataSource: Shop.brandSource('未设置'), valueExpr: 'id', displayExpr: 'name',
+                        searchEnabled: true, showClearButton: true, placeholder: '请选择品牌（品牌管理）'
+                    }
+                },
+                { dataField: 'supplier', label: { text: '供应商' } },
+                { dataField: 'weight_g', label: { text: '重量（克）' }, editorType: 'dxNumberBox', editorOptions: { min: 0, format: '#,##0', showSpinButtons: false } },
+                { dataField: 'source_url', label: { text: '货源链接' }, colSpan: 2, validationRules: [{ type: 'pattern', pattern: '^$|^https?://', message: '需以 http:// 或 https:// 开头' }] }
+            ] },
+            { itemType: 'group', caption: '价格', colCount: 4, colSpan: 2, items: [
+                { dataField: 'cost_price', label: { text: '拿货价' }, editorType: 'dxNumberBox', editorOptions: { min: 0, format: '#,##0.00', showSpinButtons: false, onValueChanged: showProfit } },
+                { dataField: 'sale_price', label: { text: '销售价' }, editorType: 'dxNumberBox', editorOptions: { min: 0, format: '#,##0.00', showSpinButtons: false, onValueChanged: showProfit } },
+                { dataField: 'shipping_fee', label: { text: '运费' }, editorType: 'dxNumberBox', editorOptions: { min: 0, format: '#,##0.00', showSpinButtons: false, onValueChanged: showProfit } },
+                { label: { text: '利润 / 毛利率' }, template: function (_, el) { $profit = $('<div class="profit-box"></div>').appendTo(el); showProfit(); } }
+            ] },
+            { itemType: 'group', caption: '商品属性', colSpan: 2, items: [
+                { label: { visible: false }, template: function (_, el) { $attrBox = $('<div class="attr-grid"></div>').appendTo(el); renderAttrs(); } }
+            ] },
+            { itemType: 'group', caption: '商品图片（第一张为主图）', colSpan: 2, items: [
+                { label: { visible: false }, template: function (_, el) { $images = $('<div class="img-list"></div>').appendTo(el); renderImages(); } }
+            ] },
+            { itemType: 'group', caption: '其他', colSpan: 2, items: [
+                { dataField: 'description', label: { text: '商品描述' }, editorType: 'dxTextArea', editorOptions: { minHeight: 90, autoResizeEnabled: true } },
+                ...Shop.langs.map(function (l) {
+                    return { dataField: 'i18n.' + l.code + '.description', label: { text: '商品描述 (' + l.code + ')' }, editorType: 'dxTextArea', editorOptions: { minHeight: 90, autoResizeEnabled: true } };
+                }),
+                { dataField: 'status', label: { text: '上架' }, editorType: 'dxSwitch' }
+            ] }
+        ]
+    }).dxForm('instance');
+
+    renderSkus();
+
+    function setTitle() {
+        var t = goodsId ? '编辑商品' + (data.name ? ' · ' + data.name : '') : '新增商品';
+        $('#editTitle').text(t);
+    }
+
+    function num(v) { return Number(v) || 0; }
+
+    function showProfit() {
+        if (!$profit) { return; }
+        var profit = num(data.sale_price) - num(data.cost_price) - num(data.shipping_fee);
+        var pct = num(data.sale_price) ? (profit / num(data.sale_price) * 100).toFixed(1) + '%' : '-';
+        $profit.text(profit.toFixed(2) + ' / ' + pct).toggleClass('neg', profit < 0);
+    }
+
+    /* 属性：按当前分类取「通用 + 该分类」的属性定义，值存进 data.attr_values */
+    function renderAttrs() {
+        if (!$attrBox) { return; }
+        $attrBox.empty().text('加载中...');
+        Shop.call('GET', '/attributes?category_id=' + (data.category_id || 0)).then(function (attrs) {
+            $attrBox.empty();
+            if (!attrs.length) { $attrBox.append('<span class="muted">该分类暂无属性，可在「商品属性」里配置</span>'); return; }
+            attrs.forEach(function (a) {
+                var $row = $('<div class="attr-item"></div>').appendTo($attrBox);
+                $('<div class="attr-label"></div>').text(a.name + (a.is_required ? ' *' : '')).appendTo($row);
+                var $ed = $('<div></div>').appendTo($row);
+                var common = { value: data.attr_values[a.name] || '', width: '100%', onValueChanged: function (e) { data.attr_values[a.name] = e.value || ''; } };
+                if (a.input_type === 'select') {
+                    // 单选属性：选的是默认语言的可选值，各语言显示靠「商品属性」里维护的可选值译文自动对应，这里不用再填
+                    $ed.dxSelectBox($.extend(common, { items: a.options, value: data.attr_values[a.name] || null, showClearButton: true, placeholder: '请选择' }));
+                    Shop.langs.forEach(function (l) {
+                        var $t = $('<div class="attr-i18n"></div>').appendTo($row);
+                        function show() {
+                            var v = data.attr_values[a.name], i = (a.options || []).indexOf(v);
+                            var tr = i >= 0 && a.i18n && a.i18n[l.code] && a.i18n[l.code].options ? a.i18n[l.code].options[i] : '';
+                            $t.text(v ? l.code + '：' + (tr || '（未翻译，显示默认值）') : '');
+                        }
+                        show();
+                        $ed.dxSelectBox('instance').on('valueChanged', show);
+                    });
+                } else if (a.input_type === 'multiselect') {
+                    // 多选属性：值是默认语言可选值的数组，各语言显示靠可选值译文按序号对应
+                    var cur0 = data.attr_values[a.name];
+                    data.attr_values[a.name] = Array.isArray(cur0) ? cur0 : [];
+                    $ed.dxTagBox({
+                        items: a.options, value: data.attr_values[a.name], width: '100%', showClearButton: true, placeholder: '请选择（可多选）',
+                        showSelectionControls: true, applyValueMode: 'instantly',
+                        onValueChanged: function (e) { data.attr_values[a.name] = e.value || []; }
+                    });
+                    Shop.langs.forEach(function (l) {
+                        var $t = $('<div class="attr-i18n"></div>').appendTo($row);
+                        function show() {
+                            var vs = data.attr_values[a.name] || [];
+                            var trs = (a.i18n && a.i18n[l.code] && a.i18n[l.code].options) || [];
+                            $t.text(vs.length ? l.code + '：' + vs.map(function (v) { return trs[(a.options || []).indexOf(v)] || v; }).join('、') : '');
+                        }
+                        show();
+                        $ed.dxTagBox('instance').on('valueChanged', show);
+                    });
+                } else if (a.input_type === 'number') {
+                    // 数字属性：按定义的小数位数录入（0 位就是整数），单位显示在输入框右侧；各语言的单位在「商品属性」里维护，这里不用填
+                    var dec = a.decimal_places || 0;
+                    $ed.css({ display: 'flex', alignItems: 'center', gap: '8px' });
+                    var cur = data.attr_values[a.name];
+                    var $nb = $('<div></div>').css('flex', '1').appendTo($ed);
+                    $('<span class="attr-unit"></span>').text(a.unit || '').appendTo($ed);
+                    var $hints = Shop.langs.map(function () { return $('<div class="attr-i18n"></div>').appendTo($row); });
+                    function showUnits() {
+                        var v = data.attr_values[a.name];
+                        Shop.langs.forEach(function (l, i) {
+                            var u = (a.i18n && a.i18n[l.code] && a.i18n[l.code].unit) || a.unit || '';
+                            $hints[i].text(v !== undefined && v !== '' ? l.code + '：' + v + (u ? ' ' + u : '') : '');
+                        });
+                    }
+                    $nb.dxNumberBox({
+                        value: cur === undefined || cur === '' ? null : Number(cur),
+                        format: { type: 'fixedPoint', precision: dec },
+                        step: dec ? Math.pow(10, -dec) : 1, showSpinButtons: false, width: '100%',
+                        onValueChanged: function (e) {
+                            data.attr_values[a.name] = e.value === null || e.value === undefined ? '' : Number(e.value).toFixed(dec);
+                            showUnits();
+                        }
+                    });
+                    showUnits();
+                } else {
+                    var multi = a.input_type === 'textarea';
+                    if (multi) { $ed.dxTextArea($.extend(common, { minHeight: 70, autoResizeEnabled: true, maxLength: 2000 })); } else { $ed.dxTextBox(common); }
+                    // 文本 / 多行文本属性：录入的内容本身要翻译，每种语言一个输入框
+                    Shop.langs.forEach(function (l) {
+                        var vals = data.i18n[l.code].attr_values;
+                        $('<div></div>').appendTo($row).css('margin-top', '4px')[multi ? 'dxTextArea' : 'dxTextBox']({
+                            minHeight: multi ? 70 : undefined, autoResizeEnabled: multi, maxLength: multi ? 2000 : undefined,
+                            value: vals[a.name] || '', width: '100%', placeholder: a.name + ' (' + l.code + ')',
+                            onValueChanged: function (e) { vals[a.name] = e.value || ''; }
+                        });
+                    });
+                }
+            });
+        }, function (msg) { $attrBox.text('属性加载失败：' + msg); });
+    }
+
+    /* 图片：data.images 为地址数组，上传后追加，保存时整体提交 */
+    function renderImages() {
+        $images.empty();
+        data.images.forEach(function (url, i) {
+            var $it = $('<div class="img-item"></div>').appendTo($images);
+            $('<img>').attr('src', url).appendTo($it);
+            if (i === 0) { $('<span class="img-main">主图</span>').appendTo($it); }
+            var $bar = $('<div class="img-bar"></div>').appendTo($it);
+            if (i > 0) {
+                $('<a href="javascript:;">设为主图</a>').on('click', function () {
+                    data.images.unshift(data.images.splice(i, 1)[0]); renderImages();
+                }).appendTo($bar);
+            }
+            $('<a href="javascript:;">删除</a>').on('click', function () { data.images.splice(i, 1); renderImages(); }).appendTo($bar);
+        });
+        if (data.images.length < 20) {
+            var $add = $('<div class="img-add">+ 上传</div>').appendTo($images);
+            var $file = $('<input type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple style="display:none">').appendTo($add);
+            $add.on('click', function () { $file.trigger('click'); });
+            $file.on('click', function (e) { e.stopPropagation(); }).on('change', function () { uploadFiles(this.files); this.value = ''; });
+        }
+    }
+
+    function uploadFiles(files) {
+        var list = Array.prototype.slice.call(files, 0, 20 - data.images.length);
+        var chain = $.Deferred().resolve().promise();
+        list.forEach(function (f) {
+            chain = chain.then(function () {
+                var fd = new FormData();
+                fd.append('file', f);
+                return $.ajax({ url: '/api/v1/shop/upload', method: 'POST', data: fd, processData: false, contentType: false }).then(function (res) {
+                    if (res.code !== 0) { return $.Deferred().reject(res.msg).promise(); }
+                    data.images.push(res.data.url); renderImages();
+                }, function (xhr) { return $.Deferred().reject((xhr.responseJSON && xhr.responseJSON.msg) || '上传失败').promise(); });
+            });
+        });
+        chain.fail(function (msg) { apiError(msg); });
+    }
+
+    /* SKU：商品保存过（有 id）才能管理 */
+    function renderSkus() {
+        var $s = $('#skuSection').empty();
+        $('<div class="sku-title">规格（SKU）</div>').appendTo($s);
+        if (!goodsId) { $('<div class="muted"></div>').text('请先保存商品，再维护规格').appendTo($s); return; }
+        Shop.skuGrid($s, goodsId);
+    }
+
+    function save() {
+        if (!form.validate().isValid) { return; }
+        var body = $.extend({}, data);
+        delete body.profit; delete body.margin_pct; delete body.sku_count; delete body.stock;
+        delete body.created_at; delete body.updated_at; delete body.main_image_url;
+        var creating = !goodsId;
+        var req = creating ? Shop.call('POST', '/goods', body) : Shop.call('PUT', '/goods/' + goodsId, body);
+        req.then(function (res) {
+            DevExpress.ui.notify('商品已保存', 'success', 1800);
+            Shop.notifyChanged('goods');
+            if (creating) { goodsId = res.id; renderSkus(); }  // 之后再点保存就是修改，不会重复新增；规格区域随即可用
+            setTitle();
+        }, apiError);
+    }
+}
+</script>
+<style>
+.edit-bar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: #fff; border-bottom: 1px solid #e3e3e3; }
+.edit-title { font-size: 15px; font-weight: 600; }
+.edit-actions { display: flex; gap: 8px; }
+.edit-body { max-width: 1100px; }
+.sku-section { margin-top: 16px; }
+.sku-title { font-weight: 600; margin: 6px 0; }
+.neg { color: #d9363e; }
+.profit-box { line-height: 34px; font-weight: 600; }
+.attr-grid { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.attr-item { width: calc(50% - 8px); }
+.attr-label { font-size: 12px; color: #666; margin-bottom: 2px; }
+.attr-unit { flex: 0 0 auto; color: #666; min-width: 24px; }
+.attr-i18n { font-size: 12px; color: #8a8a8a; margin-top: 2px; min-height: 16px; }
+.img-list { display: flex; flex-wrap: wrap; gap: 10px; }
+.img-item, .img-add { width: 110px; height: 110px; border: 1px solid #ddd; border-radius: 4px; position: relative; overflow: hidden; background: #fafafa; }
+.img-item img { width: 100%; height: 100%; object-fit: contain; }
+.img-main { position: absolute; left: 0; top: 0; background: #1976d2; color: #fff; font-size: 12px; padding: 0 6px; }
+.img-bar { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.55); display: flex; justify-content: space-around; padding: 2px 0; font-size: 12px; }
+.img-bar a { color: #fff; text-decoration: none; }
+.img-add { display: flex; align-items: center; justify-content: center; color: #1976d2; cursor: pointer; border-style: dashed; }
+</style>
+{% endblock %}

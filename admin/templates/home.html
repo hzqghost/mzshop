@@ -1,0 +1,8 @@
+{% extends "page.html" %}
+{% block title %}首页{% endblock %}
+{% block body %}
+<div class="page-pad">
+    <h2>欢迎，{{ user.real_name or user.username }}</h2>
+    <p class="muted">mzShop 电商统一数据管理与分析平台</p>
+</div>
+{% endblock %}

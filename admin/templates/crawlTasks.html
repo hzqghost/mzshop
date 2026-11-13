@@ -1,0 +1,185 @@
+{% extends "page.html" %}
+{% block title %}采集任务{% endblock %}
+{% block body %}
+<div class="page-pad">
+    <div id="taskGrid"></div>
+</div>
+<div id="runPopup"></div>
+<script>
+var RUN_STATUS = { pending: '待执行', running: '执行中', success: '成功', partial: '部分失败', failed: '失败', cancelled: '已取消' };
+
+$(function () {
+    var grid = new DxGrid($('#taskGrid')[0], {
+        dataSource: DxGrid.restStore('/api/v1/crawl-tasks', 'id'),
+        keyExpr: 'id',
+        editing: {
+            mode: 'popup',
+            allowAdding: true,
+            allowUpdating: true,
+            allowDeleting: true,
+            useIcons: true,
+            texts: {
+                addRow: '新增任务', editRow: '编辑', deleteRow: '删除',
+                saveRowChanges: '保存', cancelRowChanges: '取消',
+                confirmDeleteTitle: '删除任务',
+                confirmDeleteMessage: '确定删除该任务吗？其执行记录会一并删除，已采集的商品保留'
+            },
+            popup: { title: '采集任务', width: 620, height: 'auto', showTitle: true },
+            form: {
+                colCount: 1,
+                labelLocation: 'left',
+                items: [
+                    'name', 'platform', 'keyword', 'max_pages', 'category_names', 'attr_name', 'status',
+                    'schedule_enabled', 'schedule_cron'
+                ]
+            }
+        },
+        onInitNewRow: function (e) {
+            e.data.platform = 'ebay';
+            e.data.max_pages = 10;
+            e.data.status = true;
+            e.data.schedule_enabled = false;
+            e.data.category_names = [];
+        },
+        onRowDblClick: function (e) {
+            if (e.rowType === 'data') { e.component.editRow(e.rowIndex); }
+        },
+        onToolbarPreparing: function (e) {
+            e.toolbarOptions.items.forEach(function (item) {
+                if (item.name === 'addRowButton') {
+                    item.showText = 'always';
+                    item.location = 'before';
+                    item.options = $.extend(item.options, { type: 'default', stylingMode: 'contained' });
+                }
+            });
+        },
+        onRowInserted: function () { DevExpress.ui.notify('任务已新增', 'success', 1800); },
+        onRowUpdated: function () { DevExpress.ui.notify('任务已保存', 'success', 1800); },
+        onRowRemoved: function () { DevExpress.ui.notify('任务已删除', 'success', 1800); },
+        columns: [
+            { dataField: 'id', caption: 'ID', width: 60, allowEditing: false, formItem: { visible: false } },
+            {
+                dataField: 'name', caption: '任务名称',
+                validationRules: [{ type: 'required', message: '请输入任务名称' }, { type: 'stringLength', max: 100, message: '最长 100 个字符' }]
+            },
+            {
+                dataField: 'platform', caption: '平台', width: 80,
+                lookup: { dataSource: [{ id: 'ebay', name: 'eBay' }], valueExpr: 'id', displayExpr: 'name' }
+            },
+            { dataField: 'keyword', caption: '搜索关键字', validationRules: [{ type: 'required', message: '请输入搜索关键字' }] },
+            {
+                dataField: 'max_pages', caption: '页数', dataType: 'number', width: 70,
+                editorOptions: { min: 1, max: 10, showSpinButtons: true },
+                validationRules: [{ type: 'required', message: '请输入页数' }, { type: 'range', min: 1, max: 10, message: '页数需在 1~10 之间' }]
+            },
+            {
+                dataField: 'category_names', caption: '遍历分类', allowFiltering: false, allowHeaderFiltering: false,
+                cellTemplate: function (cell, info) { cell.text((info.value || []).join(' | ')); },
+                editCellTemplate: function (cell, info) {
+                    $('<div>').appendTo(cell).dxTagBox({
+                        value: info.value || [],
+                        items: info.value || [],
+                        acceptCustomValue: true,
+                        showSelectionControls: false,
+                        placeholder: "输入分类名后回车，如 Women's Fragrances",
+                        onCustomItemCreating: function (a) {
+                            var t = (a.text || '').trim();
+                            if (!t) { a.customItem = null; return; }
+                            a.customItem = t;
+                        },
+                        onValueChanged: function (a) { info.setValue(a.value); }
+                    });
+                },
+                validationRules: [{
+                    type: 'custom', message: '至少填写一个分类名',
+                    validationCallback: function (o) { return Array.isArray(o.value) ? o.value.length > 0 : !!o.value; }
+                }]
+            },
+            {
+                dataField: 'attr_name', caption: '遍历属性', width: 130,
+                editorOptions: { placeholder: '左侧属性名，如 Fragrance Name；留空不遍历' }
+            },
+            { dataField: 'status', caption: '启用', dataType: 'boolean', width: 60 },
+            { dataField: 'schedule_enabled', caption: '定时', dataType: 'boolean', width: 60 },
+            {
+                dataField: 'schedule_cron', caption: '定时表达式', width: 120,
+                editorOptions: { placeholder: '5 段 cron，如 0 3 * * *（每天 3 点）' },
+                validationRules: [{
+                    type: 'custom', message: '启用定时需填写 5 段 cron 表达式',
+                    validationCallback: function (o) {
+                        if (!o.data.schedule_enabled) { return true; }
+                        return /^\S+(\s+\S+){4}$/.test((o.value || '').trim());
+                    }
+                }]
+            },
+            { dataField: 'next_run_at', caption: '下次执行', allowEditing: false, formItem: { visible: false }, width: 140 },
+            { dataField: 'last_run_at', caption: '最近执行', allowEditing: false, formItem: { visible: false }, width: 140 },
+            {
+                dataField: 'last_run_status', caption: '最近状态', allowEditing: false, formItem: { visible: false }, width: 90,
+                calculateDisplayValue: function (r) { return RUN_STATUS[r.last_run_status] || ''; }
+            },
+            {
+                type: 'buttons', caption: '操作', width: 130,
+                buttons: [
+                    'edit', 'delete',
+                    {
+                        icon: 'runner', hint: '立即执行（由采集器进程领取）',
+                        onClick: function (e) {
+                            DevExpress.ui.dialog.confirm('确定立即执行任务「' + e.row.data.name + '」吗？', '执行任务').then(function (yes) {
+                                if (!yes) { return; }
+                                apiPost('/api/v1/crawl-tasks/' + e.row.data.id + '/run').then(function () {
+                                    DevExpress.ui.notify('已提交，等待采集器领取', 'success', 2000);
+                                    grid.refresh();
+                                }, apiError);
+                            });
+                        }
+                    },
+                    { icon: 'detailslayout', hint: '查看执行记录', onClick: function (e) { showRuns(e.row.data); } }
+                ]
+            }
+        ]
+    });
+
+    function showRuns(task) {
+        var $pop = $('#runPopup');
+        $pop.dxPopup({
+            title: '执行记录 - ' + task.name,
+            width: 900, height: 480, showTitle: true, dragEnabled: true, hideOnOutsideClick: true,
+            contentTemplate: function (content) {
+                var $g = $('<div>').appendTo(content);
+                var store = new DevExpress.data.CustomStore({
+                    key: 'id',
+                    load: function () {
+                        return $.get('/api/v1/crawl-tasks/' + task.id + '/runs').then(function (r) { return r.data; });
+                    }
+                });
+                $g.dxDataGrid({
+                    dataSource: store, height: 400, showBorders: true, columnAutoWidth: true, noDataText: '暂无执行记录',
+                    columns: [
+                        { dataField: 'id', caption: 'ID', width: 60 },
+                        { dataField: 'trigger_type', caption: '触发', width: 70, calculateCellValue: function (r) { return r.trigger_type === 'schedule' ? '定时' : '手动'; } },
+                        { dataField: 'status', caption: '状态', width: 80, calculateCellValue: function (r) { return RUN_STATUS[r.status] || r.status; } },
+                        { caption: '进度', width: 90, calculateCellValue: function (r) { return r.done_units + ' / ' + r.total_units; } },
+                        { dataField: 'item_count', caption: '商品数', width: 80 },
+                        { dataField: 'started_at', caption: '开始', width: 140 },
+                        { dataField: 'finished_at', caption: '结束', width: 140 },
+                        { dataField: 'error_msg', caption: '错误' },
+                        {
+                            type: 'buttons', width: 70,
+                            buttons: [{
+                                text: '取消', visible: function (e) { return e.row.data.status === 'pending' || e.row.data.status === 'running'; },
+                                onClick: function (e) {
+                                    apiPost('/api/v1/crawl-tasks/runs/' + e.row.data.id + '/cancel').then(function () {
+                                        $g.dxDataGrid('instance').refresh(); grid.refresh();
+                                    }, apiError);
+                                }
+                            }]
+                        }
+                    ]
+                });
+            }
+        }).dxPopup('instance').show();
+    }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,166 @@
+/* ══ 设计令牌 ══════════════════════════════════════════════════ */
+:root {
+    --mdm-bg-page: #f5f7f8;
+    --mdm-bg-card: #fff;
+    --mdm-primary: #0C6C9E;
+    --mdm-primary-bg: #e8f3fa;
+    --mdm-text: #242424;
+    --mdm-text-sub: #616161;
+    --mdm-text-mute: #8a8a8a;
+    --mdm-border: #e0e0e0;
+    --mdm-input-border: #bdbdbd;
+    --mdm-radius: 4px;
+    --mdm-radius-lg: 8px;
+    --mdm-shadow-pop: 0 8px 24px rgba(0, 0, 0, .14);
+}
+
+.dx-theme-material-typography a { color: var(--mdm-primary); }
+
+/* ══ 皮肤 .mdm-ui2：后台内页的 <body> 默认带，弹窗 wrapper 由 dxDefaults.js 挂 ══
+ * 全局 .dx-texteditor-input 带 !important，这里权重更高且同样 !important 才压得住。
+ */
+.mdm-ui2 { color: var(--mdm-text); }
+
+.mdm-ui2 .dx-texteditor.dx-editor-filled,
+.mdm-ui2 .dx-texteditor.dx-editor-outlined,
+.mdm-ui2 .dx-texteditor.dx-editor-underlined {
+    background: var(--mdm-bg-card);
+    border: 1px solid var(--mdm-input-border);
+    border-radius: var(--mdm-radius);
+    box-shadow: none;
+}
+.mdm-ui2 .dx-texteditor::before,
+.mdm-ui2 .dx-texteditor::after { display: none; }
+.mdm-ui2 .dx-texteditor.dx-state-hover { background: var(--mdm-bg-card); border-color: var(--mdm-text-sub); }
+.mdm-ui2 .dx-texteditor.dx-state-active,
+.mdm-ui2 .dx-texteditor.dx-state-focused {
+    background: var(--mdm-bg-card);
+    border-color: var(--mdm-primary);
+    box-shadow: 0 0 0 1px var(--mdm-primary);
+}
+.mdm-ui2 .dx-texteditor.dx-state-readonly,
+.mdm-ui2 .dx-texteditor.dx-state-readonly.dx-state-hover,
+.mdm-ui2 .dx-texteditor.dx-state-disabled { background: #f5f5f5; border-color: var(--mdm-border); }
+.mdm-ui2 .dx-texteditor.dx-invalid { border-color: #d13438; }
+.mdm-ui2 .dx-texteditor .dx-texteditor-input { color: var(--mdm-text) !important; font-size: 14px !important; }
+
+/* 分页器里的每页条数下拉 / 页码输入框压成 28px 左右 */
+.mdm-ui2 .dx-pager .dx-texteditor-input { padding: 4px 8px; min-height: 0; line-height: 18px; }
+.mdm-ui2 .dx-pager .dx-page-sizes .dx-texteditor-input { padding-inline-end: 4px; }
+.mdm-ui2 .dx-pager.dx-light-mode .dx-page-sizes { min-width: 72px; }
+.mdm-ui2 .dx-pager .dx-dropdowneditor-button { width: 20px; min-width: 20px; }
+.mdm-ui2 .dx-pager .dx-page-sizes .dx-selectbox,
+.mdm-ui2 .dx-pager .dx-page-index { min-height: 0; }
+
+.mdm-ui2 .dx-field-item-label-text { color: var(--mdm-text-sub); font-weight: 400 !important; }
+.mdm-ui2 .dx-button.dx-button-mode-contained { border-radius: var(--mdm-radius); box-shadow: none; }
+.mdm-ui2 .dx-button.dx-button-mode-contained.dx-button-default:not(.dx-state-disabled) { background-color: var(--mdm-primary); color: #fff; }
+.mdm-ui2 .dx-button.dx-button-mode-contained.dx-button-default.dx-state-hover:not(.dx-state-disabled) { background-color: #0a5a84; }
+
+/* ══ 表格（--gs-* 变量由系统 → Grid 配置按用户写在 <body> 上，没设就是默认方案）══ */
+.mdm-ui2 .dx-datagrid { border-radius: var(--gs-radius, var(--mdm-radius)); }
+
+.mdm-ui2 .dx-datagrid .dx-header-row {
+    background: var(--gs-header-bg, var(--mdm-bg-card));
+    color: var(--gs-header-fg, var(--mdm-text));
+}
+.mdm-ui2 .dx-datagrid .dx-header-row > td {
+    font-weight: var(--gs-header-weight, 600);
+    padding-top: var(--gs-head-pad-y, calc(var(--gs-pad-y, 8px) + 1px));
+    padding-bottom: var(--gs-head-pad-y, calc(var(--gs-pad-y, 8px) + 1px));
+    border-bottom: 1px solid var(--mdm-border);
+}
+.mdm-ui2 .dx-datagrid .dx-header-row > td .dx-datagrid-text-content,
+.mdm-ui2 .dx-datagrid .dx-header-row > td .dx-sort,
+.mdm-ui2 .dx-datagrid .dx-header-row > td .dx-header-filter { color: var(--gs-header-fg, inherit); }
+
+/* material 的悬停规则把表头文字 / 排序箭头写成黑色，深色表头下压回配置的文字色 */
+.mdm-ui2 .dx-datagrid .dx-header-row > td:hover .dx-datagrid-text-content,
+.mdm-ui2 .dx-datagrid .dx-header-row > td:hover .dx-sort,
+.mdm-ui2 .dx-datagrid .dx-header-row > td:hover .dx-sort-indicator,
+.mdm-ui2 .dx-datagrid .dx-header-row > td:hover .dx-header-filter { color: var(--gs-header-fg, var(--mdm-text)); }
+
+/* 悬停底色取表头文字色的 14% 叠在表头底上：深色表头变亮、浅色表头变深 */
+.mdm-ui2 .dx-datagrid .dx-header-row > td:hover:not(.dx-command-select):not(.dx-command-expand):not(.dx-editor-cell):not(.dx-command-edit):not(.dx-datagrid-group-space) {
+    background-color: color-mix(in srgb, var(--gs-header-fg, #000) 14%, transparent);
+}
+
+.mdm-ui2 .dx-datagrid-rowsview .dx-row > td {
+    padding-top: var(--gs-pad-y, 8px);
+    padding-bottom: var(--gs-pad-y, 8px);
+    border-bottom: 1px solid #eee;
+}
+
+/* 斑马纹：偶数行浅底，悬停 / 选中的底色权重更高，照常盖过它 */
+.mdm-ui2.gs-stripe .dx-datagrid-rowsview .dx-data-row.dx-row-alt > td,
+.gs-preview .dx-datagrid-rowsview .dx-data-row.dx-row-alt > td { background: var(--gs-stripe-bg, #f6f8fa); }
+
+.mdm-ui2 .dx-datagrid-rowsview .dx-data-row.dx-state-hover:not(.dx-selection) > td { background: var(--gs-hover-bg, var(--mdm-primary-bg)); }
+
+/* 选中行 / 焦点行底色（设了才有 .gs-select）；焦点行 material 是深色底白字，换浅底要连文字色一起换 */
+.gs-select .dx-datagrid-rowsview .dx-selection.dx-row:not(.dx-row-focused) > td,
+.gs-select .dx-datagrid-rowsview .dx-row-focused.dx-data-row:not(.dx-edit-row) > td:not(.dx-focused) {
+    background-color: var(--gs-select-bg);
+    color: var(--mdm-text);
+}
+
+.gs-font .dx-datagrid,
+.gs-font .dx-datagrid .dx-row > td { font-size: var(--gs-font-size); }
+
+/* 文字全部靠左：DevExtreme 把对齐写在单元格行内样式上，得 !important */
+.gs-align-left .dx-datagrid .dx-header-row > td,
+.gs-align-left .dx-datagrid .dx-filter-row > td,
+.gs-align-left .dx-datagrid .dx-data-row > td { text-align: left !important; }
+
+/* ── 弹窗（dxPopup）── */
+.dx-overlay-wrapper.mdm-ui2 .dx-overlay-content { border-radius: var(--mdm-radius-lg); box-shadow: var(--mdm-shadow-pop); }
+
+/* ══ dxForm 样式（系统 → Form 配置，按用户保存）══════════════════
+ * class 和变量写在 <body>（配置页预览写在预览容器上），没选的项（跟随默认）没有对应 class，表单保持原样。
+ * 用户明确选了值就要全站统一，所以带 !important。选择器开头的 :not(#fs) 只是借一个 id 的权重，
+ * 压过页面里按 id 写的表单样式。
+ */
+:not(#fs) .fs-label-left .dx-form .dx-field-item-label-content { text-align: left !important; justify-content: flex-start !important; }
+:not(#fs) .fs-label-right .dx-form .dx-field-item-label-content { text-align: right !important; justify-content: flex-end !important; }
+:not(#fs) .fs-label-color .dx-form .dx-field-item-label-text { color: var(--fs-label-color) !important; }
+:not(#fs) .fs-weight-normal .dx-form .dx-field-item-label-text { font-weight: 400 !important; }
+:not(#fs) .fs-weight-bold .dx-form .dx-field-item-label-text { font-weight: 600 !important; }
+
+:not(#fs) .fs-font .dx-form .dx-field-item-label,
+:not(#fs) .fs-font .dx-form .dx-field-item-label-text,
+:not(#fs) .fs-font .dx-form .dx-texteditor .dx-texteditor-input,
+:not(#fs) .fs-font .dx-form .dx-texteditor .dx-placeholder::before { font-size: var(--fs-font-size) !important; }
+
+/* 行间距：每行上下各一半；第一行上面和分组 / 页签行不加 */
+:not(#fs) .fs-gap .dx-form .dx-layout-manager .dx-field-item { padding-bottom: var(--fs-gap) !important; }
+:not(#fs) .fs-gap .dx-form .dx-field-item:not(.dx-field-item-has-group):not(.dx-field-item-has-tabs):not(.dx-first-row):not(.dx-label-v-align) { padding-top: var(--fs-gap) !important; }
+
+/* 输入框高度：压输入区上下内边距；多行框只改内边距，不动行高 */
+:not(#fs) .fs-pad .dx-form .dx-texteditor .dx-texteditor-input,
+:not(#fs) .fs-pad .dx-form .dx-texteditor .dx-placeholder::before { padding-top: var(--fs-pad-y) !important; padding-bottom: var(--fs-pad-y) !important; }
+:not(#fs) .fs-pad .dx-form .dx-texteditor:not(.dx-textarea) .dx-texteditor-input,
+:not(#fs) .fs-pad .dx-form .dx-texteditor:not(.dx-textarea) .dx-placeholder::before { min-height: 0 !important; line-height: 20px !important; }
+
+/* 紧凑档：下拉箭头 / 清除按钮 / 加减按钮跟着收窄 */
+:not(#fs) .fs-compact .dx-form .dx-texteditor-buttons-container .dx-button { min-width: 20px; min-height: 20px; height: 20px; margin: 0; }
+:not(#fs) .fs-compact .dx-form .dx-texteditor-buttons-container .dx-button .dx-button-content { padding: 1px; line-height: 0; }
+
+:not(#fs) .fs-radius .dx-form .dx-texteditor { border-radius: var(--fs-radius) !important; }
+:not(#fs) .fs-border .dx-form .dx-texteditor { border-color: var(--fs-input-border) !important; }
+:not(#fs) .fs-focus .dx-form .dx-texteditor.dx-state-focused,
+:not(#fs) .fs-focus .dx-form .dx-texteditor.dx-state-active { border-color: var(--fs-input-focus) !important; box-shadow: 0 0 0 1px var(--fs-input-focus) !important; }
+:not(#fs) .fs-bg .dx-form .dx-texteditor:not(.dx-state-readonly):not(.dx-state-disabled) { background: var(--fs-input-bg) !important; }
+:not(#fs) .fs-readonly-bg .dx-form .dx-texteditor.dx-state-readonly,
+:not(#fs) .fs-readonly-bg .dx-form .dx-texteditor.dx-state-disabled { background: var(--fs-readonly-bg) !important; }
+:not(#fs) .fs-value-color .dx-form .dx-texteditor .dx-texteditor-input { color: var(--fs-value-color) !important; }
+
+/* 紧凑表单容器（挂了 .mdm-industrial 的）的底色 */
+:not(#fs) .fs-panel-bg .mdm-industrial,
+.mdm-industrial.fs-panel-bg { background: var(--fs-panel-bg) !important; }
+
+/* 表格里已选中（只读的布尔列）的勾选框：深灰底 #333333 */
+.dx-datagrid .dx-checkbox-checked.dx-state-readonly .dx-checkbox-icon,
+.dx-treelist .dx-checkbox-checked.dx-state-readonly .dx-checkbox-icon {
+    background-color: #333333;
+    border-color: #333333;
+}

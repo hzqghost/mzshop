@@ -1,0 +1,201 @@
+{% extends "page.html" %}
+{% block title %}供应商产品目录{% endblock %}
+{% block body %}
+<div class="page-pad">
+    <div id="catalogGrid"></div>
+</div>
+<script src="/static/js/lib/shop.js"></script>
+<script src="/static/js/lib/supplierCatalog.js"></script>
+<script>
+var grid;
+
+/* 产品详情在框架的内容标签页里打开（同一个产品重复点击会切到已打开的标签） */
+function openItem(id, name) {
+    if (id) { openAdminTab('/supplierCatalogEdit?id=' + id, '产品 · ' + (name || id)); }
+    else { openAdminTab('/supplierCatalogEdit', '新增产品'); }
+}
+
+$(function () {
+    grid = new DxGrid($('#catalogGrid')[0], {
+        dataSource: DxGrid.remoteStore('/api/v1/supplier-catalog/items', 'id'),
+        keyExpr: 'id',
+        // 服务端分页 / 筛选 / 排序；表头筛选需要服务端按列去重取值，这里不提供，用筛选行代替
+        remoteOperations: { paging: true, filtering: true, sorting: true },
+        headerFilter: { visible: false },
+        // 批量流转状态（已选品由后续选品流程设置）
+        batchActions: [
+            {
+                id: 'st0', text: '标记为待核对', confirm: '确定把选中的 {n} 条标记为待核对吗？', successText: '已标记',
+                run: function (ids) { return SUP.call('POST', '/items/batch-status', { ids: ids, status: 0 }); }
+            },
+            {
+                id: 'st1', text: '标记为已核对', confirm: '确定把选中的 {n} 条标记为已核对吗？', successText: '已标记',
+                run: function (ids) { return SUP.call('POST', '/items/batch-status', { ids: ids, status: 1 }); }
+            },
+            {
+                id: 'st3', text: '标记为已忽略', confirm: '确定把选中的 {n} 条标记为已忽略吗？', successText: '已标记',
+                run: function (ids) { return SUP.call('POST', '/items/batch-status', { ids: ids, status: 3 }); }
+            }
+        ],
+        batchDelete: function (id) {
+            return SUP.call('DELETE', '/items/' + id).then(function () {
+                if (window.parent !== window && window.parent.AdminLayout) {
+                    window.parent.AdminLayout.closeTabByUrl('/supplierCatalogEdit?id=' + id);
+                }
+            });
+        },
+        onRowDblClick: function (e) { if (e.rowType === 'data') { openItem(e.data.id, e.data.name); } },
+        // 展开行：原始属性 / 标准化属性 / 描述
+        masterDetail: {
+            enabled: true,
+            template: function (el, info) {
+                var d = info.data;
+                function table(title, obj) {
+                    var keys = Object.keys(obj || {});
+                    if (!keys.length) { return; }
+                    $('<div class="md-title"></div>').text(title).appendTo(el);
+                    var $t = $('<table class="md-table"></table>').appendTo(el);
+                    keys.forEach(function (k) {
+                        var v = obj[k];
+                        if (Array.isArray(v)) { v = v.join('、'); }
+                        $('<tr></tr>').append(
+                            $('<td class="md-k"></td>').text(k),
+                            $('<td></td>').text(String(v == null ? '' : v))
+                        ).appendTo($t);
+                    });
+                }
+                table('原始属性（供应商原文）', d.attrs);
+                table('标准化属性（映射到商品属性）', d.mapped_attrs);
+                if (d.description) {
+                    $('<div class="md-title"></div>').text('描述').appendTo(el);
+                    $('<div class="md-desc"></div>').text(d.description).appendTo(el);
+                }
+                if (d.remark) {
+                    $('<div class="md-title"></div>').text('资料').appendTo(el);
+                    $('<div class="md-remark"></div>').html(d.remark).appendTo(el);
+                }
+            }
+        },
+        onToolbarPreparing: function (e) {
+            e.toolbarOptions.items.push({
+                location: 'before', widget: 'dxButton',
+                options: {
+                    text: '新增产品', icon: 'add', type: 'default', stylingMode: 'contained',
+                    onClick: function () { openItem(null); }
+                }
+            });
+            e.toolbarOptions.items.push({
+                location: 'before', widget: 'dxButton',
+                options: {
+                    text: 'Excel 导入', icon: 'import', stylingMode: 'contained',
+                    onClick: function () { SUP.openImportWizard(grid, refreshLookups); }
+                }
+            });
+        },
+        columns: [
+            { dataField: 'id', caption: 'ID', width: 60 },
+            {
+                dataField: 'main_image_url', caption: '图', width: 60, allowFiltering: false, allowSorting: false, allowEditing: false,
+                cellTemplate: function (el, o) {
+                    if (o.value && (o.value.indexOf('/static/') === 0 || /^https?:\/\//i.test(o.value))) {
+                        $('<img class="thumb">').attr('src', o.value).appendTo(el);
+                    }
+                }
+            },
+            { dataField: 'supplier_sku', caption: '货号/SKU', width: 110 },
+            { dataField: 'name', caption: '产品名称', minWidth: 200 },
+            { dataField: 'supplier_id', caption: '供应商', width: 130, lookup: { dataSource: SUP.supplierSource(), valueExpr: 'id', displayExpr: 'name' } },
+            {
+                dataField: 'brand_id', caption: '品牌', width: 110,
+                lookup: { dataSource: SUP.brandSource('未知'), valueExpr: 'id', displayExpr: 'name' },
+                cellTemplate: function (el, o) {
+                    el.text(o.row.data.brand_id ? (o.displayValue || o.row.data.brand_name || '') : (o.row.data.brand_name || ''));
+                }
+            },
+            { dataField: 'category_name', caption: '供应商分类', width: 110 },
+            { dataField: 'category_id', caption: '商品分类', width: 140, visible: false, lookup: { dataSource: Shop.categorySource('未映射'), valueExpr: 'id', displayExpr: 'full_name' } },
+            { dataField: 'price', caption: '价格', dataType: 'number', format: '#,##0.00', width: 90 },
+            { dataField: 'currency', caption: '币种', width: 130, lookup: { dataSource: SUP.currencySource(), valueExpr: 'code', displayExpr: 'label', allowClearing: true } },
+            { dataField: 'stock', caption: '库存', dataType: 'number', width: 80 },
+            { dataField: 'moq', caption: '起订量', width: 80 },
+            { dataField: 'source_type', caption: '来源', width: 70, allowEditing: false, formItem: { visible: false },
+              lookup: { dataSource: [{ value: 'manual', text: '手工' }, { value: 'excel', text: 'Excel' }, { value: 'website', text: '网站' }], valueExpr: 'value', displayExpr: 'text' } },
+            {
+                dataField: 'status', caption: '状态', width: 90,
+                lookup: { dataSource: SUP.STATUSES, valueExpr: 'value', displayExpr: 'text' },
+                cellTemplate: function (el, o) {
+                    el.append($('<span class="badge st' + o.value + '"></span>').text(o.displayValue));
+                }
+            },
+            { dataField: 'goods_id', caption: '商品ID', dataType: 'number', width: 80, allowEditing: false, formItem: { visible: false }, visible: false },
+            { dataField: 'updated_at', caption: '更新时间', width: 150, allowEditing: false, formItem: { visible: false } },
+            {
+                type: 'buttons', caption: '操作', width: 80,
+                buttons: [
+                    { icon: 'edit', hint: '编辑', onClick: function (e) { openItem(e.row.data.id, e.row.data.name); } },
+                    {
+                        icon: 'trash', hint: '删除', onClick: function (e) {
+                            var row = e.row.data;
+                            DevExpress.ui.dialog.confirm('确定删除产品「' + (row.name || '') + '」吗？不可恢复', '删除产品').then(function (yes) {
+                                if (!yes) { return; }
+                                SUP.call('DELETE', '/items/' + row.id).then(function () {
+                                    DevExpress.ui.notify('产品已删除', 'success', 1800);
+                                    grid.refresh();
+                                    SUP.notifyChanged('catalog');
+                                    if (window.parent !== window && window.parent.AdminLayout) {
+                                        window.parent.AdminLayout.closeTabByUrl('/supplierCatalogEdit?id=' + row.id);
+                                    }
+                                }, apiError);
+                            });
+                        }
+                    }
+                ]
+            }
+        ]
+    });
+
+    // DevExtreme 的列 lookup 数据源只加载一次；导入会自动建档品牌、别处可能新建供应商，
+    // 数据变了要换新的数据源实例强制重新加载（否则单元格/编辑表单显示的还是旧列表）
+    function refreshLookups() {
+        grid.columnOption('brand_id', 'lookup', { dataSource: SUP.brandSource('未知'), valueExpr: 'id', displayExpr: 'name' });
+        grid.columnOption('supplier_id', 'lookup', { dataSource: SUP.supplierSource(), valueExpr: 'id', displayExpr: 'name' });
+    }
+    SUP.onChanged('catalog', function () { grid.refresh(); refreshLookups(); });
+    SUP.onChanged('brand', function () { refreshLookups(); });
+});
+</script>
+<style>
+.thumb { width: 40px; height: 40px; object-fit: contain; display: block; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; }
+.st0 { background: #fff3e0; color: #e65100; }
+.st1 { background: #e8f5e9; color: #2e7d32; }
+.st2 { background: #e3f2fd; color: #1565c0; }
+.st3 { background: #f5f5f5; color: #9e9e9e; }
+.md-title { font-weight: 600; margin: 8px 0 4px; }
+.md-table { border-collapse: collapse; margin-bottom: 6px; }
+.md-table td { border: 1px solid #e5e5e5; padding: 3px 10px; font-size: 12px; }
+.md-table .md-k { background: #fafafa; color: #666; white-space: nowrap; }
+.md-desc { font-size: 12px; color: #444; white-space: pre-wrap; }
+.md-remark { font-size: 13px; color: #333; max-width: 880px; overflow: auto; }
+.md-remark img { max-width: 100%; }
+.cell-link { color: #337ab7; }
+.wiz-title { font-weight: 600; margin-bottom: 10px; color: #444; }
+.wiz-step { height: calc(100% - 34px); }
+.wiz-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.wiz-row label { width: 70px; color: #666; }
+.wiz-row-opt { margin-top: 12px; align-items: flex-start; }
+.wiz-link { color: #337ab7; font-size: 12px; }
+.wiz-tip { color: #8a6d3b; background: #fcf8e3; border: 1px solid #faebcc; border-radius: 4px; padding: 6px 10px; margin-bottom: 10px; font-size: 12px; }
+.wiz-status { color: #888; font-size: 12px; margin-left: 12px; }
+.wiz-map-row { display: flex; align-items: center; padding: 5px 0; border-bottom: 1px dashed #eee; }
+.wiz-map-col { width: 340px; flex: none; }
+.wiz-map-name { font-weight: 600; }
+.wiz-map-sample { color: #999; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+.wiz-map-sel { margin-left: 14px; }
+#wizMapping { overflow-y: auto; height: calc(100% - 40px); }
+#wizResult { overflow-y: auto; height: 100%; }
+.wiz-err { color: #a94442; padding: 2px 0; font-size: 12px; }
+.wiz-errbox { border: 1px solid #ebccd1; background: #fdf7f7; border-radius: 4px; padding: 6px 10px; }
+.wiz-ok { padding: 8px 0; }
+</style>
+{% endblock %}
