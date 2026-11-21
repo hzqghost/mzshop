@@ -1,0 +1,108 @@
+{% extends "page.html" %}
+{% block title %}分类关联{% endblock %}
+{% block body %}
+<div class="page-pad">
+    <div class="mapping-note">本地分类只保存一个直接绑定。商品推送时若本级未绑定，会自动继承最近上级分类的绑定。</div>
+    <div id="categoryMapGrid"></div>
+</div>
+<script>
+var categoryMapGrid;
+
+function mapCall(method, path, body) {
+    return $.ajax({
+        url: APP.HOST + '/api/v1/shopify' + path, method: method,
+        contentType: 'application/json', data: body == null ? undefined : JSON.stringify(body)
+    }).then(function (res) {
+        if (!res || res.code !== 0) { return $.Deferred().reject((res && res.msg) || '请求失败').promise(); }
+        return res.data;
+    }, function (xhr) {
+        if (xhr.status === 401) { (window.top || window).location.href = APP.HOST + '/login'; }
+        return $.Deferred().reject((xhr.responseJSON && xhr.responseJSON.msg) || '请求失败').promise();
+    });
+}
+
+function openBindPopup(row) {
+    var selectedId = row.taxonomy_category_id || null;
+    var $host = $('<div></div>').appendTo(document.body);
+    var popup = $host.dxPopup({
+        title: '绑定 Shopify 标准分类', width: '90%', maxWidth: 760, height: 360,
+        showCloseButton: true, hideOnOutsideClick: false,
+        onHidden: function () { popup.dispose(); $host.remove(); },
+        contentTemplate: function (content) {
+            $('<div class="bind-local-name"></div>').text('mzShop：' + row.category_full_name).appendTo(content);
+            $('<div class="bind-help">输入中文、英文路径或分类 ID 搜索；建议选择最准确的末级分类。</div>').appendTo(content);
+            var store = new DevExpress.data.CustomStore({
+                key: 'id',
+                load: function (o) {
+                    return mapCall('GET', '/taxonomy/options?q=' + encodeURIComponent(o.searchValue || '') + '&take=100');
+                },
+                byKey: function (key) {
+                    if (key === row.taxonomy_category_id && row.taxonomy_full_name) {
+                        return $.Deferred().resolve({ id: key, text: row.taxonomy_full_name, category_id: row.taxonomy_category_code }).promise();
+                    }
+                    return $.Deferred().resolve(null).promise();
+                }
+            });
+            var select = $('<div></div>').appendTo(content).dxSelectBox({
+                dataSource: store, valueExpr: 'id', displayExpr: 'text', value: selectedId,
+                searchEnabled: true, searchExpr: 'text', minSearchLength: 1,
+                searchTimeout: 350, placeholder: '搜索 Shopify 标准分类', noDataText: '没有匹配的标准分类',
+                itemTemplate: function (item) {
+                    return $('<div><div class="taxonomy-option-name"></div><div class="taxonomy-option-id"></div></div>')
+                        .find('.taxonomy-option-name').text(item.text).end()
+                        .find('.taxonomy-option-id').text(item.category_id + (item.is_leaf === false ? ' · 非末级' : '')).end();
+                },
+                onValueChanged: function (e) { selectedId = e.value; }
+            }).dxSelectBox('instance');
+            $('<div class="bind-actions"></div>').appendTo(content).append(
+                $('<div></div>').dxButton({ text: '保存绑定', type: 'default', onClick: function () {
+                    if (!selectedId) { DevExpress.ui.notify('请选择 Shopify 标准分类', 'warning', 2200); return; }
+                    mapCall('PUT', '/category-maps/' + row.category_id, { taxonomy_category_id: selectedId }).then(function () {
+                        DevExpress.ui.notify('分类绑定已保存', 'success', 1800); popup.hide(); categoryMapGrid.refresh();
+                    }, function (msg) { DevExpress.ui.notify(String(msg), 'error', 3500); });
+                }})
+            );
+        }
+    }).dxPopup('instance');
+    popup.show();
+}
+
+$(function () {
+    categoryMapGrid = new DxGrid($('#categoryMapGrid')[0], {
+        dataSource: DxGrid.restStore('/api/v1/shopify/category-maps', 'id'),
+        keyExpr: 'id', businessToolbar: true,
+        columns: [
+            { dataField: 'category_full_name', caption: 'mzShop 分类', minWidth: 280 },
+            { dataField: 'taxonomy_full_name', caption: 'Shopify 标准分类', minWidth: 420,
+              cellTemplate: function (el, o) {
+                  if (o.value) { $('<span></span>').text(o.value).appendTo(el); }
+                  else { $('<span class="not-bound">未绑定（推送时尝试继承上级）</span>').appendTo(el); }
+              } },
+            { dataField: 'taxonomy_category_code', caption: 'Shopify 分类 ID', width: 150 },
+            { dataField: 'taxonomy_active', caption: '有效', dataType: 'boolean', width: 75 },
+            { dataField: 'updated_at', caption: '绑定时间', dataType: 'datetime', format: 'yyyy-MM-dd HH:mm:ss', width: 165 },
+            { type: 'buttons', caption: '操作', width: 125, buttons: [
+                { icon: 'link', hint: '绑定 / 更换', onClick: function (e) { openBindPopup(e.row.data); } },
+                { icon: 'remove', hint: '解绑', visible: function (e) { return !!e.row.data.taxonomy_category_id; }, onClick: function (e) {
+                    var row = e.row.data;
+                    DevExpress.ui.dialog.confirm('确定解除“' + row.category_full_name + '”的 Shopify 分类绑定吗？', '解除绑定').then(function (yes) {
+                        if (!yes) { return; }
+                        mapCall('DELETE', '/category-maps/' + row.category_id).then(function () {
+                            DevExpress.ui.notify('已解除绑定', 'success', 1800); categoryMapGrid.refresh();
+                        }, function (msg) { DevExpress.ui.notify(String(msg), 'error', 3500); });
+                    });
+                } }
+            ] }
+        ]
+    });
+});
+</script>
+<style>
+.mapping-note { padding:9px 12px; margin-bottom:10px; color:#075f96; background:#eaf6fd; border:1px solid #b9def2; border-radius:4px; }
+.not-bound { color:#9a6b00; }
+.bind-local-name { font-weight:600; margin:10px 0 8px; }
+.bind-help { color:#666; margin-bottom:18px; }
+.bind-actions { display:flex; justify-content:flex-end; margin-top:28px; }
+.taxonomy-option-id { color:#888; font-size:12px; margin-top:2px; }
+</style>
+{% endblock %}

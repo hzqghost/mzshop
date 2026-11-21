@@ -4,8 +4,8 @@
 <div class="page-pad">
     <div id="brandGrid"></div>
 </div>
-<script src="/static/js/lib/shop.js"></script>
-<script src="/static/js/lib/supplierCatalog.js"></script>
+<script src="/static/js/lib/shop.js?v=20261119-3"></script>
+<script src="/static/js/lib/supplierCatalog.js?v=20261119-1"></script>
 <script>
 /* Logo 上传：复用商品图片上传接口，成功后写回 Logo 文本框（弹窗保存时随表单一并提交） */
 var logoFileInput = null;
@@ -91,6 +91,7 @@ $(function () {
         var grid = new DxGrid($('#brandGrid')[0], {
             dataSource: DxGrid.restStore('/api/v1/brands', 'id'),
             keyExpr: 'id',
+            businessToolbar: true,
             // 拖动排序：手柄列拖动，成功后按新顺序刷新（sort_order 服务端重排）
             rowReorder: function (info) {
                 return apiPost('/api/v1/brands/move', { id: info.key, target_id: info.targetKey, after: info.after });
@@ -101,10 +102,10 @@ $(function () {
                     addRow: '新增品牌', editRow: '编辑', deleteRow: '删除', saveRowChanges: '保存', cancelRowChanges: '取消',
                     confirmDeleteMessage: '确定删除该品牌吗？已被商品或目录条目使用的品牌不能删除'
                 },
-                popup: { title: '品牌', width: 640, height: 'auto', showTitle: true, showCloseButton: true, hideOnOutsideClick: false },
+                popup: { title: '品牌', width: '90%', maxWidth: 640, height: '80%', showTitle: true, showCloseButton: true, hideOnOutsideClick: false },
                 form: {
                     colCount: 1, labelLocation: 'top',
-                    items: ['name'].concat(
+                    items: ['code', 'brand_type', 'include_in_goods_no', 'name'].concat(
                         Shop.langs.map(function (l) {
                             return { dataField: 'i18n.' + l.code + '.name', label: { text: '品牌名称 (' + l.code + ')' } };
                         }),
@@ -126,9 +127,19 @@ $(function () {
                     )
                 }
             },
+            onContentReady: function (e) {
+                var grid = e.component;
+                if (grid.__codeFirst) { return; }
+                grid.__codeFirst = true;
+                var code = grid.columnOption('code');
+                if (code && code.visibleIndex !== 0) { grid.columnOption('code', 'visibleIndex', 0); }
+            },
             onInitNewRow: function (e) {
                 e.data.status = true;
                 e.data.logo_url = '';
+                e.data.code = '';
+                e.data.brand_type = 'third_party';
+                e.data.include_in_goods_no = true;
                 e.data.i18n = Shop.blankI18n(['name']);
                 e.component.option('editing.popup.title', '新增品牌');
             },
@@ -141,19 +152,17 @@ $(function () {
             onEditorPrepared: function (e) {
                 if (e.parentType === 'dataRow' && e.dataField === 'logo_url') { mountLogoEditor(e); }
             },
-            onToolbarPreparing: function (e) {
-                e.toolbarOptions.items.forEach(function (item) {
-                    if (item.name === 'addRowButton') {
-                        item.showText = 'always';
-                        item.location = 'before';
-                        item.options = $.extend(item.options, { type: 'default', stylingMode: 'contained' });
-                    }
-                });
-            },
             onRowInserted: function () { DevExpress.ui.notify('品牌已新增', 'success', 1800); SUP.notifyChanged('brand'); },
             onRowUpdated: function () { DevExpress.ui.notify('品牌已保存', 'success', 1800); SUP.notifyChanged('brand'); },
             onRowRemoved: function () { DevExpress.ui.notify('品牌已删除', 'success', 1800); SUP.notifyChanged('brand'); },
             columns: Shop.withLang([
+                { dataField: 'code', caption: '编码', width: 120, visibleIndex: 0, validationRules: [{ type: 'stringLength', max: 50, message: '最长 50 个字符' }] },
+                {
+                    dataField: 'brand_type', caption: '品牌类型', width: 110,
+                    lookup: { dataSource: [{ value: 'own', text: '自有品牌' }, { value: 'third_party', text: '第三方品牌' }], valueExpr: 'value', displayExpr: 'text' },
+                    validationRules: [{ type: 'required', message: '请选择品牌类型' }]
+                },
+                { dataField: 'include_in_goods_no', caption: '参与商品编码', dataType: 'boolean', width: 120 },
                 { dataField: 'name', caption: '品牌名称', minWidth: 150, validationRules: [{ type: 'required', message: '请输入品牌名称' }] },
                 {
                     dataField: 'logo_url', caption: 'Logo', width: 84, allowFiltering: false, allowSorting: false, alignment: 'center',

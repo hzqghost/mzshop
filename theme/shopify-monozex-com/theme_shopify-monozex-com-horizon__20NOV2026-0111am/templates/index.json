@@ -1,0 +1,9 @@
+{
+  "sections": {
+    "monozex_home": {
+      "type": "monozex-home",
+      "settings": {}
+    }
+  },
+  "order": ["monozex_home"]
+}

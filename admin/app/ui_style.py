@@ -1,4 +1,4 @@
-"""表格 / 表单样式配置（Grid 配置、Form 配置），按登录用户保存，没存过的项取默认值。
+"""菜单 / 表格 / 表单样式配置，按登录用户保存，没存过的项取默认值。
 
 - 默认值就是页面原本的外观；读到非法值一律按默认值，保存时非法值直接拒绝
 - 内置超级管理员 id 为 0，同样存一行
@@ -23,6 +23,10 @@ def _bool(v: Any) -> bool:
 def _one_of(*items: Any) -> Callable[[Any], bool]:
     # bool 是 int 的子类，数值枚举里要排除，免得 True 被当成 1
     return lambda v: not isinstance(v, bool) and v in items
+
+
+def _int_range(min_value: int, max_value: int) -> Callable[[Any], bool]:
+    return lambda v: isinstance(v, int) and not isinstance(v, bool) and min_value <= v <= max_value
 
 
 @dataclass
@@ -51,6 +55,15 @@ class StyleKind:
             if key in stored and self.valid(key, stored[key]):
                 values[key] = stored[key]
         return values
+
+
+# ───────────── 菜单 ─────────────
+MENU_DEFAULTS = {"width": 150}
+MENU_VALIDATORS = {"width": _int_range(120, 480)}
+
+
+def menu_body_attrs(_s: dict[str, Any]) -> dict[str, str]:
+    return {"class": "", "style": ""}
 
 
 # ───────────── 表格 ─────────────
@@ -219,6 +232,7 @@ def form_body_attrs(s: dict[str, Any]) -> dict[str, str]:
 
 
 KINDS: dict[str, StyleKind] = {
+    "menu": StyleKind(MENU_DEFAULTS, MENU_VALIDATORS, {}, menu_body_attrs),
     "grid": StyleKind(GRID_DEFAULTS, GRID_VALIDATORS, GRID_PRESETS, grid_body_attrs),
     "form": StyleKind(FORM_DEFAULTS, FORM_VALIDATORS, FORM_PRESETS, form_body_attrs),
 }

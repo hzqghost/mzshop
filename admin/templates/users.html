@@ -9,6 +9,7 @@ $(function () {
     var grid = new DxGrid($('#usersGrid')[0], {
         dataSource: DxGrid.restStore('/api/v1/users', 'id'),
         keyExpr: 'id',
+        businessToolbar: true,
         hoverStateEnabled: true,
         editing: {
             mode: 'popup',
@@ -25,7 +26,7 @@ $(function () {
                 confirmDeleteTitle: '删除用户',
                 confirmDeleteMessage: '确定删除该用户吗？删除后不可恢复'
             },
-            popup: { title: '用户', width: 460, height: 'auto', showTitle: true },
+            popup: { title: '用户', width: '90%', maxWidth: 460, height: '80%', showTitle: true },
             form: { colCount: 1, labelLocation: 'left' }
         },
         onInitNewRow: function (e) { e.data.status = true; },
@@ -40,16 +41,6 @@ $(function () {
             if (e.parentType === 'dataRow' && e.dataField === 'password' && e.row.isNewRow) {
                 e.editorOptions.placeholder = '请设置登录密码（至少 6 位）';
             }
-        },
-        onToolbarPreparing: function (e) {
-            // 「新增用户」按钮是 editing.allowAdding 自带的：挪到最左边并始终显示文字，再补一个刷新
-            e.toolbarOptions.items.forEach(function (item) {
-                if (item.name === 'addRowButton') {
-                    item.showText = 'always';
-                    item.location = 'before';
-                    item.options = $.extend(item.options, { type: 'default', stylingMode: 'contained' });
-                }
-            });
         },
         onRowInserted: function () { DevExpress.ui.notify('用户已新增', 'success', 1800); },
         onRowUpdated: function () { DevExpress.ui.notify('用户已保存', 'success', 1800); },

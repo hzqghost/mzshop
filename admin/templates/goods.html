@@ -4,34 +4,94 @@
 <div class="page-pad">
     <div id="goodsGrid"></div>
 </div>
-<script src="/static/js/lib/shop.js"></script>
+<script src="/static/js/lib/shop.js?v=20261120-bundle-stock"></script>
 <script>
 var grid;
 
 /* 商品详情在框架的内容标签页里打开（同一个商品重复点击会切到已打开的标签） */
 function openGoods(id, name) {
-    if (id) { openAdminTab('/goodsEdit?id=' + id, '商品 · ' + (name || id)); }
+    if (id) { openAdminTab('/goodsEdit?id=' + id, name || String(id)); }
     else { openAdminTab('/goodsEdit', '新增商品'); }
+}
+
+function catalogLink(el, data, text) {
+    if (!data.catalog_item_id || !text) { return; }
+    var url = '/supplierCatalogEdit?id=' + data.catalog_item_id;
+    $('<a class="catalog-link"></a>').attr('href', url).text(text).on('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        openAdminTab(url, data.catalog_item_name || data.catalog_item_sku || String(data.catalog_item_id));
+    }).appendTo(el);
 }
 
 $(function () {
     Shop.ready.then(function () {
         var ro = { allowEditing: false };
+        var selectedStoreIds = [];
         grid = new DxGrid($('#goodsGrid')[0], {
-            dataSource: DxGrid.remoteStore('/api/v1/shop/goods', 'id'),
+            dataSource: DxGrid.remoteStore('/api/v1/shop/goods', 'id', function () {
+                return selectedStoreIds.length ? { store_ids: selectedStoreIds.join(',') } : {};
+            }),
             keyExpr: 'id',
             // 服务端分页 / 筛选 / 排序；表头筛选需要服务端按列去重取值，这里不提供，用筛选行代替
-            remoteOperations: { paging: true, filtering: true, sorting: true },
+            remoteOperations: { paging: true, filtering: true, sorting: true, grouping: false },
             headerFilter: { visible: false },
+            // 主从展开表保留列固定，并由 DxGrid 修复展开箭头
+            keepColumnFixing: true,
+            // 第一行独立业务区；查询控件放左侧，新增 / 编辑 / 删除 / 批量动作统一放右侧「操作」
+            businessToolbar: {
+                queryItems: [
+                    Shop.categoryQueryItem({ getGrid: function () { return grid; } }),
+                    Shop.storeQueryItem({
+                        getGrid: function () { return grid; },
+                        onChanged: function (ids) { selectedStoreIds = ids; grid.refresh(); }
+                    })
+                ],
+                actions: [
+                    { id: 'add', text: '新增商品', icon: 'add', run: function () { openGoods(null); } },
+                    {
+                        id: 'edit', text: '编辑选中商品', icon: 'edit',
+                        run: function (g) {
+                            var keys = g.getSelectedRowKeys();
+                            if (keys.length !== 1) { DevExpress.ui.notify('请勾选一个要编辑的商品', 'warning', 1800); return; }
+                            $.when(g.getSelectedRowsData()).then(function (rows) {
+                                var row = rows && rows[0];
+                                if (row) { openGoods(row.id, row.name); }
+                            });
+                        }
+                    }
+                ]
+            },
             // 批量上架 / 下架：一次请求更新勾选的全部商品
             batchActions: [
                 {
                     id: 'on', text: '批量上架', confirm: '确定上架选中的 {n} 个商品吗？', successText: '已上架',
-                    run: function (ids) { return Shop.call('POST', '/goods/batch-status', { ids: ids, status: true }); }
+                    run: function (ids) {
+                        return Shop.call('POST', '/goods/batch-status', { ids: ids, status: true }).then(function (res) {
+                            if (res && res.skipped) {
+                                DevExpress.ui.notify('已上架 ' + res.updated + ' 个，跳过 ' + res.skipped + ' 个没有店铺记录的商品', 'warning', 2800);
+                            }
+                            return res;
+                        });
+                    }
                 },
                 {
                     id: 'off', text: '批量下架', confirm: '确定下架选中的 {n} 个商品吗？', successText: '已下架',
                     run: function (ids) { return Shop.call('POST', '/goods/batch-status', { ids: ids, status: false }); }
+                },
+                {
+                    id: 'shopify', text: '推送到 Shopify', confirm: '确定把选中的 {n} 个商品加入 Shopify 推送队列吗？',
+                    run: function (ids) {
+                        return $.ajax({ url: APP.HOST + '/api/v1/shopify/goods/batch-enqueue', method: 'POST',
+                            contentType: 'application/json', data: JSON.stringify({ ids: ids }) }).then(function (res) {
+                            var d = res.data || {};
+                            DevExpress.ui.notify('已创建 ' + (d.created || 0) + ' 个推送任务，跳过 ' + (d.skipped || 0) + ' 个重复任务',
+                                d.created ? 'success' : 'warning', 2800);
+                            return d;
+                        }, function (xhr) {
+                            return $.Deferred().reject((xhr.responseJSON && xhr.responseJSON.msg) || '加入 Shopify 推送队列失败').promise();
+                        });
+                    }
                 }
             ],
             // 批量删除：逐个删，并关掉对应的详情标签
@@ -41,41 +101,102 @@ $(function () {
                 });
             },
             masterDetail: { enabled: true, template: function (el, info) {
+                var d = info.data || {};
+                function n(v) { return v == null || v === '' ? '' : v; }
+                var regionRows = d.region_prices || [];
+                $('<div class="sku-title"></div>').text('区域价格').appendTo(el);
+                if (!regionRows.length) {
+                    $('<div class="muted"></div>').text('还没有区域价格').appendTo(el);
+                } else {
+                    var $rp = $('<table class="md-table"></table>').appendTo(el);
+                    $('<tr></tr>').append(
+                        ['区域', '价格', '建议售价', '最低售价', '最高售价', '币种', '运费', '最快到达', '最慢到达', '税费'].map(function (h) {
+                            return $('<td class="md-k"></td>').text(h);
+                        })
+                    ).appendTo($rp);
+                    regionRows.forEach(function (r) {
+                        $('<tr></tr>').append(
+                            [r.region_name, n(r.price), n(r.suggested_price), n(r.min_price), n(r.max_price), r.currency || '', n(r.shipping_fee), n(r.arrival_days_min), n(r.arrival_days_max), n(r.tax)].map(function (v) {
+                                return $('<td></td>').text(String(v));
+                            })
+                        ).appendTo($rp);
+                    });
+                }
+                var storeRows = d.stores || [];
+                $('<div class="sku-title"></div>').text('店铺').appendTo(el);
+                if (!storeRows.length) {
+                    $('<div class="muted"></div>').text('还没有店铺记录，上架无效').appendTo(el);
+                } else {
+                    var $st = $('<table class="md-table"></table>').appendTo(el);
+                    $('<tr></tr>').append(
+                        ['平台', '店铺', '可以上架'].map(function (h) { return $('<td class="md-k"></td>').text(h); })
+                    ).appendTo($st);
+                    storeRows.forEach(function (s) {
+                        $('<tr></tr>').append(
+                            [s.platform_name || '', s.store_name || '', s.allowed ? '是' : '否'].map(function (v) {
+                                return $('<td></td>').text(String(v));
+                            })
+                        ).appendTo($st);
+                    });
+                }
                 $('<div class="sku-title">规格（SKU）</div>').appendTo(el);
-                Shop.skuGrid(el, info.key);
+                Shop.skuGrid(el, info.key, { hidePager: true });
             } },
             onRowDblClick: function (e) { if (e.rowType === 'data') { openGoods(e.data.id, e.data.name); } },
-            onToolbarPreparing: function (e) {
-                e.toolbarOptions.items.push({
-                    location: 'before', widget: 'dxButton',
-                    options: { text: '新增商品', icon: 'add', type: 'default', stylingMode: 'contained', onClick: function () { openGoods(null); } }
-                });
-            },
             columns: Shop.withLang([
                 $.extend({ dataField: 'id', caption: 'ID', width: 60 }, ro),
                 {
-                    dataField: 'main_image_url', caption: '主图', width: 70, allowFiltering: false, allowSorting: false,
-                    cellTemplate: function (el, o) { if (o.value) { $('<img class="thumb">').attr('src', o.value).appendTo(el); } }
+                    dataField: 'main_image_url', caption: '主图', width: 70, fixed: true, fixedPosition: 'left', allowFiltering: false, allowSorting: false,
+                    cellTemplate: function (el, o) {
+                        if (!o.value || (o.value.indexOf('/static/') !== 0 && !/^https?:\/\//i.test(o.value))) { return; }
+                        $('<a class="thumb-link" target="_blank" rel="noopener"></a>').attr('href', o.value).attr('title', '查看大图')
+                            .on('click', function (e) { e.stopPropagation(); })
+                            .append($('<img class="thumb" alt="">').attr('src', o.value))
+                            .appendTo(el);
+                    }
                 },
                 { dataField: 'goods_no', caption: '商品编码', width: 130 },
                 { dataField: 'name', caption: '商品名称', minWidth: 220 },
                 { dataField: 'category_id', caption: '分类', width: 160, lookup: { dataSource: Shop.categorySource('未分类'), valueExpr: 'id', displayExpr: 'full_name' } },
                 { dataField: 'brand_id', caption: '品牌', width: 120, lookup: { dataSource: Shop.brandSource('未设置'), valueExpr: 'id', displayExpr: 'name' } },
-                { dataField: 'brand', caption: '品牌（原文）', width: 100, visible: false },
+                { dataField: 'supplier_id', caption: '供应商', width: 120, lookup: { dataSource: Shop.supplierSource('未设置'), valueExpr: 'id', displayExpr: 'name' } },
                 { dataField: 'cost_price', caption: '拿货价', dataType: 'number', format: '#,##0.00', width: 90 },
-                { dataField: 'sale_price', caption: '销售价', dataType: 'number', format: '#,##0.00', width: 90 },
-                { dataField: 'shipping_fee', caption: '运费', dataType: 'number', format: '#,##0.00', width: 80 },
-                { dataField: 'profit', caption: '利润', dataType: 'number', format: '#,##0.00', width: 80,
-                  cellTemplate: function (el, o) { el.text(Shop.money(o.value)).toggleClass('neg', o.value < 0); } },
-                { dataField: 'margin_pct', caption: '毛利率', dataType: 'number', width: 80,
-                  cellTemplate: function (el, o) { el.text(o.value === null ? '-' : o.value + '%').toggleClass('neg', o.value !== null && o.value < 0); } },
+                {
+                    dataField: 'region_min_price', caption: '区域最低价', dataType: 'number', format: '#,##0.00', width: 110,
+                    cellTemplate: function (el, o) {
+                        if (o.value == null || o.value === '') { return; }
+                        var region = (o.data && o.data.region_min_price_region) || '';
+                        var $n = $('<span class="region-min-price"></span>').text(o.text == null ? '' : o.text).appendTo(el);
+                        if (region) { $n.attr('title', region); }
+                    }
+                },
+                { dataField: 'store_count', caption: '店铺数', dataType: 'number', width: 80, visible: false },
+                {
+                    dataField: 'store_label', caption: '店铺', minWidth: 160, visible: false, allowFiltering: false, allowSorting: false,
+                    calculateCellValue: function (row) {
+                        return (row.stores || []).map(function (s) { return s.store_code || ''; }).filter(Boolean).join('、');
+                    }
+                },
+                {
+                    dataField: 'catalog_item_name', caption: '绑定产品', minWidth: 160, visible: false,
+                    cellTemplate: function (el, o) {
+                        var d = o.data || {};
+                        if (!d.catalog_item_id) { return; }
+                        var sku = d.catalog_item_sku || '';
+                        var name = d.catalog_item_name || '';
+                        catalogLink(el, d, sku && name ? sku + ' · ' + name : (sku || name));
+                    }
+                },
+                {
+                    dataField: 'catalog_item_sku', caption: '绑定货号', width: 120, visible: false,
+                    cellTemplate: function (el, o) { catalogLink(el, o.data || {}, o.value || ''); }
+                },
                 { dataField: 'sku_count', caption: '规格数', dataType: 'number', width: 70 },
                 { dataField: 'stock', caption: '总库存', dataType: 'number', width: 80 },
                 { dataField: 'status', caption: '上架', dataType: 'boolean', width: 70 },
-                { dataField: 'supplier', caption: '供应商', width: 110, visible: false },
                 { dataField: 'updated_at', caption: '更新时间', width: 150 },
                 {
-                    type: 'buttons', caption: '操作', width: 80,
+                    type: 'buttons', caption: '操作', width: 80, fixed: true, fixedPosition: 'right',
                     buttons: [
                         { icon: 'edit', hint: '编辑', onClick: function (e) { openGoods(e.row.data.id, e.row.data.name); } },
                         {
@@ -91,7 +212,21 @@ $(function () {
                         }
                     ]
                 }
-            ], 'name', Shop.langColumns('name', '商品名称'))
+            ], 'name', Shop.langColumns('name', '商品名称').map(function (c) {
+                if (c.dataField === 'i18n.en.name') { c.visible = false; }
+                return c;
+            })),
+            onContentReady: function (e) {
+                var key = 'dxGrid:/goods:defaultHidden:20261120';
+                try {
+                    if (localStorage.getItem(key) !== '1') {
+                        ['i18n.en.name', 'store_count', 'store_label', 'catalog_item_name'].forEach(function (field) {
+                            if (e.component.columnOption(field)) { e.component.columnOption(field, 'visible', false); }
+                        });
+                        localStorage.setItem(key, '1');
+                    }
+                } catch (ignore) { /* 本地存储不可用时保留列定义里的默认隐藏 */ }
+            }
         });
         // 详情页保存 / SKU 变动后刷新列表
         Shop.onChanged('goods', function () { grid.refresh(); });
@@ -99,8 +234,15 @@ $(function () {
 });
 </script>
 <style>
-.thumb { width: 40px; height: 40px; object-fit: contain; display: block; }
-.neg { color: #d9363e; }
-.sku-title { font-weight: 600; margin: 6px 0; }
+.thumb-link { display: block; line-height: 0; }
+.thumb { width: 40px; height: 40px; object-fit: contain; display: block; cursor: pointer; }
+.region-min-price { cursor: help; border-bottom: 1px dashed #9aa; }
+.catalog-link { color: var(--mdm-primary, #0c6c9e); text-decoration: none; }
+.catalog-link:hover { text-decoration: underline; }
+.sku-title { font-weight: 600; margin: 8px 0 4px; }
+.muted { color: #888; font-size: 12px; margin-bottom: 6px; }
+.md-table { border-collapse: collapse; margin-bottom: 6px; }
+.md-table td { border: 1px solid #e5e5e5; padding: 3px 10px; font-size: 12px; }
+.md-table .md-k { background: #fafafa; color: #666; white-space: nowrap; }
 </style>
 {% endblock %}

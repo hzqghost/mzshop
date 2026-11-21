@@ -14,7 +14,6 @@
 |---|---|---|
 | `contracts/` | 公共契约（本目录） | 进行中 |
 | `admin/` | 管理后台：FastAPI + Jinja2 + jQuery + DevExtreme 24.1.3 | 框架已生成：登录、用户管理、Grid/Form 样式配置 |
-| `tool/crawler/` | 数据采集工具 | 设计中，见 CRAWLER.md |
 
 ## 3. 契约清单
 
@@ -25,7 +24,6 @@
 | [API.md](API.md) | 接口响应格式、路径、鉴权约定 |
 | [FRONTEND.md](FRONTEND.md) | 前端页面与 DxGrid 约定 |
 | [TABLES.md](TABLES.md) | 现有表清单（新增/修改表必须同步更新） |
-| [CRAWLER.md](CRAWLER.md) | 采集任务系统设计（任务/执行/单元/商品/评价）；DDL 见 `ddl/` |
 | [TODO.md](TODO.md) | 已知偏差与待办，开工前先看 |
 
 ## 4. 新任务工作流

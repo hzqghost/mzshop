@@ -3,10 +3,10 @@ import json
 import re
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from .models import Supplier, SupplierCatalogItem, SysAttrType, SysAttrValue
+from .models import ShopGoodsRegion, Supplier, SupplierCatalogItem, SupplierCatalogItemRegion, SysAttrType, SysAttrValue
 
 CURRENCY_CODE = "currency"
 _TYPE_CODE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,29}$")
@@ -195,20 +195,25 @@ def normalize_currency(db: Session, raw, previous: str | None = None) -> str:
     return code
 
 
-def currency_usage(db: Session, code: str) -> tuple[int, int]:
+def currency_usage(db: Session, code: str) -> tuple[int, int, int]:
     if not code:
-        return 0, 0
+        return 0, 0, 0
     suppliers = db.scalar(select(func.count()).where(Supplier.default_currency == code)) or 0
-    items = db.scalar(select(func.count()).where(SupplierCatalogItem.currency == code)) or 0
-    return int(suppliers), int(items)
+    on_region = select(SupplierCatalogItemRegion.item_id).where(SupplierCatalogItemRegion.currency == code)
+    items = db.scalar(select(func.count()).select_from(SupplierCatalogItem).where(
+        or_(SupplierCatalogItem.currency == code, SupplierCatalogItem.id.in_(on_region)))) or 0
+    goods = db.scalar(select(func.count()).select_from(ShopGoodsRegion).where(ShopGoodsRegion.currency == code)) or 0
+    return int(suppliers), int(items), int(goods)
 
 
-def _usage_message(suppliers: int, items: int) -> str:
+def _usage_message(suppliers: int, items: int, goods: int = 0) -> str:
     parts = []
     if suppliers:
         parts.append(f"{suppliers} 个供应商")
     if items:
         parts.append(f"{items} 个目录条目")
+    if goods:
+        parts.append(f"{goods} 个商品")
     return "、".join(parts)
 
 
@@ -328,9 +333,9 @@ def apply_value(db: Session, row: SysAttrValue, values: dict, creating: bool) ->
         if dup:
             fail(f"编码已存在：{code}")
         if not creating and old_code and code != old_code and attr_type.code == CURRENCY_CODE:
-            suppliers, items = currency_usage(db, old_code)
-            if suppliers or items:
-                fail(f"编码 {old_code} 已被{_usage_message(suppliers, items)}使用，不能修改")
+            suppliers, items, goods = currency_usage(db, old_code)
+            if suppliers or items or goods:
+                fail(f"编码 {old_code} 已被{_usage_message(suppliers, items, goods)}使用，不能修改")
         row.code = code
     elif not attr_type.use_code and creating:
         row.code = None
@@ -353,9 +358,9 @@ def assert_value_deletable(db: Session, row: SysAttrValue) -> None:
         fail("请先删除下级属性值")
     attr_type = db.get(SysAttrType, row.type_id)
     if attr_type and attr_type.code == CURRENCY_CODE and row.code:
-        suppliers, items = currency_usage(db, row.code)
-        if suppliers or items:
-            fail(f"币种 {row.code} 已被{_usage_message(suppliers, items)}使用，不能删除")
+        suppliers, items, goods = currency_usage(db, row.code)
+        if suppliers or items or goods:
+            fail(f"币种 {row.code} 已被{_usage_message(suppliers, items, goods)}使用，不能删除")
 
 
 def option_dict(row: SysAttrValue) -> dict:

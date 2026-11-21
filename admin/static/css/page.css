@@ -2,6 +2,44 @@ html, body { margin: 0; padding: 0; height: 100%; font-family: "Microsoft YaHei"
 .page-pad { padding: 12px; }
 .muted { color: #8a8a8a; }
 
+/* 列表页第一行业务区：左侧查询控件，右侧统一操作菜单；Grid 自带工具栏独占第二行 */
+.dxgrid-business-toolbar { margin-bottom: 8px; padding: 0 8px; min-height: 42px; background: var(--mdm-bg-card, #fff); border: 1px solid var(--mdm-border, #e1e5e8); border-radius: var(--mdm-radius-lg, 4px); box-sizing: border-box; }
+.dxgrid-business-toolbar .dx-toolbar { background: transparent; }
+.dxgrid-category-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 8px 12px; }
+.dxgrid-category-layout > .shop-category-side { grid-column: 1; grid-row: 1 / span 2; }
+.dxgrid-category-layout > .dxgrid-business-toolbar { grid-column: 2; grid-row: 1; margin-bottom: 0; }
+.dxgrid-category-layout > .dx-datagrid { grid-column: 2; grid-row: 2; min-width: 0; }
+.shop-category-side { height: calc(100vh - 24px); min-height: 320px; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; padding: 10px 8px; background: var(--mdm-bg-card, #fff); border: 1px solid var(--mdm-border, #e1e5e8); border-radius: var(--mdm-radius-lg, 4px); }
+.shop-category-side-head { display: flex; justify-content: space-between; align-items: center; padding: 0 8px 8px; font-weight: 600; }
+.shop-category-side-head a { color: var(--mdm-primary, #0c6c9e); text-decoration: none; }
+.shop-category-side-tree { flex: 1; min-height: 0; overflow: auto; }
+
+/* 分类多选弹窗：与店铺「绑定分类」保持同一套布局 */
+.dx-popup-content:has(.cat-pick) { overflow: hidden; display: flex; flex-direction: column; height: calc(80vh - 110px); }
+.cat-pick { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--mdm-text, #333); flex: 1; }
+.cat-pick-tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--mdm-border, #e6e6e6); padding: 0 2px; }
+.cat-pick-tab, .cat-pick-all { color: var(--mdm-primary, #0c6c9e); padding: 8px 2px 7px; font-size: 13px; border: 0; background: none; cursor: pointer; font-family: inherit; }
+.cat-pick-tab { border-bottom: 2px solid transparent; }
+.cat-pick-tab.is-on { font-weight: 600; border-bottom-color: var(--mdm-primary, #0c6c9e); }
+.cat-pick-bar { display: flex; align-items: center; gap: 16px; padding: 8px 2px; border-bottom: 1px solid var(--mdm-border, #eee); font-size: 13px; }
+.cat-pick-count { color: var(--mdm-text-mute, #8a8a8a); }
+.cat-pick-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.cat-pick-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 2px 16px; }
+.cat-pick-q { padding: 10px 2px 6px; }
+.cat-pick-input { width: 100%; box-sizing: border-box; height: 32px; padding: 0 10px; border: 1px solid #d0d0d0; border-radius: 4px; font-size: 13px; }
+.cat-pick-input:focus { outline: none; border-color: var(--mdm-primary, #0c6c9e); }
+.cat-pick-empty { color: var(--mdm-text-mute, #8a8a8a); padding: 24px 8px; }
+.cat-pick-group { margin-bottom: 10px; }
+.cat-pick-head { margin-bottom: 4px; }
+.cat-pick-label { display: inline-flex; align-items: flex-start; gap: 6px; cursor: pointer; max-width: 100%; }
+.cat-pick-label input { margin: 3px 0 0; }
+.cat-pick-label span { line-height: 1.4; }
+.cat-pick-parent { font-weight: 600; }
+.cat-pick-items { display: flex; flex-wrap: wrap; padding-left: 22px; }
+.cat-pick-item { flex: 0 0 200px; width: 200px; max-width: 100%; box-sizing: border-box; padding: 3px 10px 3px 0; font-weight: 400; }
+.cat-pick-sub { padding-left: 22px; }
+.cat-pick-search-row { display: flex; align-items: flex-start; padding: 6px 4px; width: 100%; box-sizing: border-box; }
+
 /* 布尔字段一行：复选框在左、标签在右 */
 .mdm-field-inline-check.dx-field-item { display: flex; align-items: center; }
 .mdm-field-inline-check .dx-field-item-label { order: 2; flex: 0 0 auto !important; width: auto !important; min-width: 0 !important; padding-left: 8px; }
@@ -30,3 +68,16 @@ html, body { margin: 0; padding: 0; height: 100%; font-family: "Microsoft YaHei"
 .i18n-line { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .i18n-key { flex: 0 0 200px; font-size: 12px; color: #666; word-break: break-all; }
 .i18n-line .dx-textbox { flex: 1; }
+
+/* 区域弹窗：全球 / 洲 / 国家分级缩进 */
+.geo-pick { border: 1px solid var(--mdm-border, #e6e6e6); border-radius: 4px; background: #fff; max-height: 460px; overflow: auto; padding: 8px 12px 12px; }
+.geo-pick-row { display: flex; align-items: center; gap: 4px; min-height: 26px; }
+.geo-pick-toggle { flex: 0 0 16px; width: 16px; height: 16px; padding: 0; border: 0; background: transparent; color: #667; cursor: pointer; line-height: 16px; }
+.geo-pick-toggle.is-empty { visibility: hidden; }
+.geo-pick-children { margin-left: 20px; }
+.geo-pick-label { display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0; }
+.geo-pick-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.geo-pick-node > .geo-pick-row .geo-pick-label { font-weight: 600; }
+.geo-pick-items { display: flex; flex-wrap: wrap; }
+.geo-pick-item { flex: 0 0 190px; width: 190px; max-width: 100%; box-sizing: border-box; padding: 2px 8px 2px 0; font-weight: 400; }
+.geo-pick-more { margin-left: 4px; color: #8a8a8a; }

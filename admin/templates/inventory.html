@@ -1,0 +1,41 @@
+{% extends "page.html" %}
+{% block title %}库存管理{% endblock %}
+{% block body %}
+<div class="page-pad"><div class="inventory-note">可售 = 在库 − 占用 − 不可售 − 安全库存。组合父 SKU 不在这里调整。</div><div id="inventoryGrid"></div></div>
+<script>
+var inventoryGrid;
+function invCall(method,path,body){return $.ajax({url:APP.HOST+'/api/v1/inventory'+path,method:method,contentType:'application/json',data:body==null?undefined:JSON.stringify(body)}).then(function(r){return r.data;},function(x){return $.Deferred().reject((x.responseJSON&&x.responseJSON.msg)||'请求失败').promise();});}
+function skuDataSource(){return new DevExpress.data.DataSource({paginate:false,store:new DevExpress.data.CustomStore({key:'id',loadMode:'raw',load:function(o){return $.ajax({url:APP.HOST+'/api/v1/bundles/component-options',data:{q:o.searchValue||'',take:100}}).then(function(r){return r.data||[];});},byKey:function(key){return $.ajax({url:APP.HOST+'/api/v1/bundles/component-options',data:{sku_id:key,take:1}}).then(function(r){return (r.data||[])[0];});}})});}
+function adjustStock(current){
+    invCall('GET','/locations').then(function(locations){
+        current=current||{};
+        if(!current.id){locations=locations.filter(function(x){return x.status;});}
+        if(!locations.length){DevExpress.ui.notify('请先在“地点管理”中创建并启用库存地点','warning',3000);return;}
+        var data={sku_id:current.sku_id||null,location_id:current.location_id||(locations.length===1?locations[0].id:null),on_hand:Number(current.on_hand||0),unavailable:Number(current.unavailable||0),safety_stock:Number(current.safety_stock||0),remark:''};
+        var editing=!!current.id,host=$('<div></div>').appendTo(document.body),form;
+        var popup=host.dxPopup({title:'调整 SKU 库存',width:520,height:'auto',showCloseButton:true,onHidden:function(){host.remove();},contentTemplate:function(el){
+            form=$('<div></div>').appendTo(el).dxForm({formData:data,labelLocation:'top',items:[
+                {dataField:'sku_id',label:{text:'普通 SKU'},editorType:'dxSelectBox',editorOptions:{dataSource:skuDataSource(),valueExpr:'id',displayExpr:'text',searchEnabled:true,minSearchLength:0,showDataBeforeSearch:true,readOnly:editing},validationRules:[{type:'required'}]},
+                {dataField:'location_id',label:{text:'库存地点'},editorType:'dxSelectBox',editorOptions:{dataSource:locations,valueExpr:'id',displayExpr:'name',readOnly:editing},validationRules:[{type:'required'}]},
+                {dataField:'on_hand',label:{text:'调整后在库'},editorType:'dxNumberBox',editorOptions:{min:0,showSpinButtons:true},validationRules:[{type:'required'}]},
+                {dataField:'unavailable',label:{text:'调整后不可售'},editorType:'dxNumberBox',editorOptions:{min:0,showSpinButtons:true},validationRules:[{type:'required'}]},
+                {dataField:'safety_stock',label:{text:'安全库存'},editorType:'dxNumberBox',editorOptions:{min:0,showSpinButtons:true},validationRules:[{type:'required'}]},
+                {dataField:'remark',label:{text:'调整说明'},validationRules:[{type:'required',message:'请填写调整说明'}]}
+            ]}).dxForm('instance');},toolbarItems:[{toolbar:'bottom',location:'after',widget:'dxButton',options:{text:'取消',onClick:function(){popup.hide();}}},{toolbar:'bottom',location:'after',widget:'dxButton',options:{text:'保存',type:'default',onClick:function(){if(!form.validate().isValid){return;}invCall('POST','/adjust',form.option('formData')).then(function(){popup.hide();inventoryGrid.refresh();DevExpress.ui.notify(editing?'库存已调整':'SKU 库存已建立','success',2000);},function(m){DevExpress.ui.notify(String(m),'error',3000);});}}}]}).dxPopup('instance');popup.show();
+    },function(m){DevExpress.ui.notify(String(m),'error',3000);});
+}
+function manageLocations(){
+    var host=$('<div></div>').appendTo(document.body),grid;
+    var popup=host.dxPopup({title:'地点管理',width:'86%',maxWidth:850,height:'76%',showCloseButton:true,onHidden:function(){host.remove();},contentTemplate:function(el){
+        grid=new DxGrid($('<div></div>').appendTo(el)[0],{dataSource:DxGrid.restStore('/api/v1/inventory/locations','id'),keyExpr:'id',dxFeatures:false,height:430,
+            editing:{mode:'popup',allowAdding:true,allowUpdating:true,allowDeleting:true,useIcons:true,popup:{title:'库存地点',width:560,height:'auto',showTitle:true},form:{colCount:1,labelLocation:'top'}},onInitNewRow:function(e){e.data.status=true;},
+            onRowInserted:function(){DevExpress.ui.notify('地点已创建','success',1800);},onRowUpdated:function(){DevExpress.ui.notify('地点已更新','success',1800);},
+            columns:[{dataField:'code',caption:'地点编码',width:150,validationRules:[{type:'required'}]},{dataField:'name',caption:'地点名称',width:180,validationRules:[{type:'required'}]},{dataField:'status',caption:'启用',dataType:'boolean',width:80},{dataField:'remark',caption:'备注',minWidth:180},{type:'buttons',caption:'操作',width:90,buttons:['edit','delete']}]
+        });
+    },toolbarItems:[{toolbar:'bottom',location:'after',widget:'dxButton',options:{text:'关闭',onClick:function(){popup.hide();}}}]}).dxPopup('instance');popup.show();
+}
+function skuGoodsLink(el,o){var row=o.data,url='/goodsEdit?id='+row.goods_id;$('<a class="inventory-goods-link"></a>').attr('href',url).text(o.value||'').on('click',function(e){e.preventDefault();e.stopPropagation();openAdminTab(url,row.goods_name||row.sku_code);}).appendTo(el);}
+$(function(){inventoryGrid=new DxGrid($('#inventoryGrid')[0],{dataSource:DxGrid.remoteStore('/api/v1/inventory/balances','id'),keyExpr:'id',remoteOperations:{paging:true,filtering:true,sorting:true,grouping:false},headerFilter:{visible:false},businessToolbar:{actions:[{id:'locations',text:'地点管理',icon:'map',run:manageLocations},{id:'adjust',text:'调整 SKU 库存',icon:'edit',run:function(){adjustStock();}}]},paging:{pageSize:30},pager:{visible:true,showPageSizeSelector:true,allowedPageSizes:[20,30,50,100],showInfo:true},onRowDblClick:function(e){adjustStock(e.data);},columns:[{dataField:'sku_code',caption:'SKU编码',width:150,cellTemplate:skuGoodsLink},{dataField:'goods_name',caption:'商品名称',minWidth:200},{dataField:'spec_name',caption:'规格',width:150},{dataField:'location_name',caption:'库存地点',width:130},{dataField:'on_hand',caption:'在库',dataType:'number',width:90},{dataField:'reserved',caption:'占用',dataType:'number',width:90},{dataField:'unavailable',caption:'不可售',dataType:'number',width:90},{dataField:'safety_stock',caption:'安全库存',dataType:'number',width:100},{dataField:'available',caption:'可售',dataType:'number',width:90},{dataField:'adjustment_remark',caption:'调整说明',visible:false,minWidth:180},{type:'buttons',caption:'操作',width:70,buttons:[{icon:'edit',hint:'调整库存',onClick:function(e){adjustStock(e.row.data);}}]}]});});
+</script>
+<style>.inventory-note{padding:9px 12px;margin-bottom:10px;background:var(--mdm-surface-container,#eef6ff);border-radius:4px}.inventory-goods-link{color:var(--mdm-primary,#0c6c9e);text-decoration:none}.inventory-goods-link:hover{text-decoration:underline}</style>
+{% endblock %}

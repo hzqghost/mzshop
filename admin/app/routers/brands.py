@@ -41,7 +41,8 @@ def _usage(db: Session, bid: int) -> tuple[int, int]:
 
 def _brand_dict(db: Session, b: Brand) -> dict:
     items, goods = _usage(db, b.id)
-    return {"id": b.id, "name": b.name, "logo_url": b.logo_url, "website": b.website, "remark": b.remark,
+    return {"id": b.id, "code": b.code or "", "name": b.name, "brand_type": b.brand_type,
+            "include_in_goods_no": bool(b.include_in_goods_no), "logo_url": b.logo_url, "website": b.website, "remark": b.remark,
             "sort_order": b.sort_order, "status": bool(b.status), "item_count": items, "goods_count": goods,
             "created_at": _fmt(b.created_at), "updated_at": _fmt(b.updated_at)}
 
@@ -55,8 +56,19 @@ def _attach(db: Session, items: list[dict]) -> list[dict]:
 
 
 def _apply(db: Session, b: Brand, values: dict, creating: bool) -> None:
+    if "code" in values or creating:
+        b.code = _text(values, "code", "编码", 50) or None
     if "name" in values or creating:
         b.name = _text(values, "name", "品牌名称", 100, required=True)
+    if "brand_type" in values or creating:
+        brand_type = str(values.get("brand_type") or "third_party").strip()
+        if brand_type not in {"own", "third_party"}:
+            fail("品牌类型不合法")
+        b.brand_type = brand_type
+    if "include_in_goods_no" in values:
+        b.include_in_goods_no = 1 if values["include_in_goods_no"] else 0
+    elif creating:
+        b.include_in_goods_no = 1
     for f, label, size in (("logo_url", "Logo 地址", 500), ("website", "官网地址", 255), ("remark", "备注", 500)):
         if f in values or creating:
             setattr(b, f, _text(values, f, label, size))
@@ -77,8 +89,11 @@ def _save(db: Session, b: Brand, values: dict) -> None:
     """flush（检查名称唯一）→ 保存随行品牌译文 → commit；任何一步失败整体回滚。"""
     try:
         db.flush()
-    except IntegrityError:
+    except IntegrityError as e:
         db.rollback()
+        detail = str(getattr(e, "orig", e))
+        if "uq_brand_code" in detail:
+            fail("品牌编码已存在")
         fail("品牌名称已存在")
     save_inline(db, "brand", b, values.get("i18n"))
     db.commit()

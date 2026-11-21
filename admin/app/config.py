@@ -16,6 +16,16 @@ DB_URL = "mysql+pymysql://{user}:{password}@{host}:{port}/{name}?charset=utf8mb4
 
 SECRET_KEY = os.environ["SECRET_KEY"]
 
+SHOPIFY_CLIENT_ID = os.environ.get("SHOPIFY_CLIENT_ID", "").strip()
+SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET", "").strip()
+SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-10").strip()
+SHOPIFY_REQUEST_TIMEOUT_SECONDS = int(os.environ.get("SHOPIFY_REQUEST_TIMEOUT_SECONDS", "30"))
+SHOPIFY_MAX_RETRIES = int(os.environ.get("SHOPIFY_MAX_RETRIES", "3"))
+SHOPIFY_WEBHOOK_BASE_URL = os.environ.get("SHOPIFY_WEBHOOK_BASE_URL", "").strip().rstrip("/")
+SHOPIFY_ASSET_BASE_URL = os.environ.get(
+    "SHOPIFY_ASSET_BASE_URL", SHOPIFY_WEBHOOK_BASE_URL
+).strip().rstrip("/")
+
 # 内置超级管理员：写在代码里，不入库，不出现在用户列表中
 SUPER_ADMIN = {
     "id": 0,

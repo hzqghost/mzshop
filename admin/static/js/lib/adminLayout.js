@@ -52,7 +52,7 @@
         return 'tab_' + url.replace(/[^a-zA-Z0-9]/g, '_');
     }
 
-    // 标签图标取自它所在的一级菜单：地址能在左侧菜单里找到才有，不属于菜单的页面（如修改资料、详情页）没有图标
+    // 普通页面标签图标与对应的叶子菜单项一致。
     function iconForUrl(url) {
         var icon = '';
         $('.menu-item').each(function () {
@@ -64,8 +64,11 @@
         return icon;
     }
 
-    // 不在菜单里的详情页如需圆形图标，在此登记（色值见 adminLayout.css 的 .tab-dot-*）
-    var DETAIL_DOTS = [];
+    // 详情页用业务类型的彩色圆形图标；标题只显示业务名称/编号，不再重复类型前缀。
+    var DETAIL_DOTS = [
+        { match: /^\/goodsEdit(?:\?|$)/, kind: 'goods', icon: 'fa-cog' },
+        { match: /^\/supplierCatalogEdit(?:\?|$)/, kind: 'product', icon: 'fa-cube' }
+    ];
 
     function detailDotFor(url) {
         for (var i = 0; i < DETAIL_DOTS.length; i++) {
@@ -319,31 +322,77 @@
     }
 
     $(function () {
-        // 左侧菜单：分组展开/收起
-        // 菜单收缩时：鼠标移到图标上提示菜单文本，点击图标则展开侧栏并选中（展开）该菜单
-        var $menuTip = $('<div id="menuTip"></div>').appendTo('body');
+        // 左侧菜单：分组展开/收起；收拢时悬停一级图标，在右侧显示子菜单。
+        var MENU_COLLAPSED_KEY = 'adminSidebarCollapsed';
+        var $appShell = $('#appShell');
+        var $menuFlyout = $('<div id="collapsedMenuFlyout"></div>').appendTo('body');
+        var flyoutTimer = null;
 
-        function hideMenuTip() {
-            $menuTip.removeClass('show');
+        function saveMenuCollapsed() {
+            try { localStorage.setItem(MENU_COLLAPSED_KEY, $appShell.hasClass('collapsed') ? '1' : '0'); } catch (e) { /* 存不了就只对本次有效 */ }
         }
 
-        $('.menu-group-title').on('mouseenter', function () {
-            if (!$('#appShell').hasClass('collapsed')) {
+        function hideMenuFlyout(delay) {
+            clearTimeout(flyoutTimer);
+            flyoutTimer = setTimeout(function () { $menuFlyout.removeClass('show').empty(); }, delay || 0);
+        }
+
+        function addFlyoutNodes($list, depth) {
+            $list.children('li').each(function () {
+                var $node = $(this);
+                if ($node.hasClass('menu-group')) {
+                    if (depth > 0) {
+                        $('<div class="flyout-section"></div>').text($node.children('.menu-group-title').find('.menu-text').first().text()).appendTo($menuFlyout);
+                    }
+                    addFlyoutNodes($node.children('.menu-children'), depth + 1);
+                    return;
+                }
+                var $item = $node;
+                $('<div class="flyout-item"></div>')
+                    .text($item.data('title'))
+                    .toggleClass('active', $item.hasClass('active'))
+                    .data({ url: $item.data('url'), title: $item.data('title'), external: $item.data('external') })
+                    .appendTo($menuFlyout);
+            });
+        }
+
+        function showMenuFlyout(title) {
+            if (!$appShell.hasClass('collapsed')) {
                 return;
             }
+            clearTimeout(flyoutTimer);
             var rect = this.getBoundingClientRect();
-            $menuTip.text($(this).find('.menu-text').first().text()).css({
-                left: rect.right + 6,
-                top: rect.top + rect.height / 2
-            }).addClass('show');
-        }).on('mouseleave', hideMenuTip);
+            $menuFlyout.empty();
+            $('<div class="flyout-title"></div>').text(title).appendTo($menuFlyout);
+            addFlyoutNodes($(this).siblings('.menu-children'), 0);
+            $menuFlyout.css({ left: rect.right, top: rect.top }).addClass('show');
+            var flyoutRect = $menuFlyout[0].getBoundingClientRect();
+            if (flyoutRect.bottom > window.innerHeight - 8) {
+                $menuFlyout.css('top', Math.max(8, window.innerHeight - flyoutRect.height - 8));
+            }
+        }
+
+        var savedCollapsed = false;
+        try { savedCollapsed = localStorage.getItem(MENU_COLLAPSED_KEY) === '1'; } catch (e) { savedCollapsed = false; }
+        $appShell.toggleClass('collapsed', savedCollapsed);
+
+        $('.menu-root > .menu-group > .menu-group-title').on('mouseenter', function () {
+            showMenuFlyout.call(this, $(this).find('.menu-text').first().text());
+        }).on('mouseleave', function () { hideMenuFlyout(120); });
+        $menuFlyout.on('mouseenter', function () { clearTimeout(flyoutTimer); })
+            .on('mouseleave', function () { hideMenuFlyout(120); })
+            .on('click', '.flyout-item', function () {
+                if ($(this).data('external')) {
+                    window.open($(this).data('url'), '_blank', 'noopener');
+                } else {
+                    openTab($(this).data('url'), $(this).data('title'));
+                }
+                hideMenuFlyout();
+            });
 
         $('.menu-group-title').on('click', function () {
             var $group = $(this).closest('.menu-group');
-            if ($('#appShell').hasClass('collapsed')) {
-                hideMenuTip();
-                $('#appShell').removeClass('collapsed');
-                $group.addClass('open');
+            if ($appShell.hasClass('collapsed')) {
                 return;
             }
             $group.toggleClass('open');
@@ -381,7 +430,9 @@
 
         // 点 LOGO 收拢/展开侧边栏
         $('#sidebarHeader').on('click', function () {
-            $('#appShell').toggleClass('collapsed');
+            $appShell.toggleClass('collapsed');
+            hideMenuFlyout();
+            saveMenuCollapsed();
         });
 
         // 标签拖动排序
@@ -411,11 +462,10 @@
             contextTabId = null;
         }
 
-        // 在浏览器新标签页里打开这个标签的页面：用 iframe 当前所在的地址（标签里点链接跳转过，就是跳转后的页面），
-        // 取不到（跨域 / 还没加载）时退回标签打开时的地址；首页标签没有页面地址，不适用
-        function openInBrowser(id) {
+        // 取 iframe 当前地址；跨域或尚未加载时退回标签初始地址。
+        function tabHref(id) {
             var tab = tabs.find(function (t) { return t.id === id; });
-            if (!tab || !tab.url) return;
+            if (!tab || !tab.url) return '';
 
             var href = APP.HOST + tab.url;
             var frame = $('.tab-pane[data-id="' + id + '"] iframe')[0];
@@ -425,7 +475,29 @@
             } catch (err) {
                 // 跨域取不到就用原地址
             }
-            window.open(href, '_blank', 'noopener');
+            return href;
+        }
+
+        function openInBrowser(id) {
+            var href = tabHref(id);
+            if (href) window.open(href, '_blank', 'noopener');
+        }
+
+        function copyFallback(text) {
+            var $input = $('<textarea readonly></textarea>').css({ position: 'fixed', left: '-9999px' }).val(text).appendTo('body');
+            $input[0].select();
+            document.execCommand('copy');
+            $input.remove();
+        }
+
+        function copyTabLink(id) {
+            var href = tabHref(id);
+            if (!href) return;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(href).catch(function () { copyFallback(href); });
+            } else {
+                copyFallback(href);
+            }
         }
 
         $('#tabs').on('contextmenu', '.tab-item', function (e) {
@@ -433,7 +505,7 @@
             closeDropdowns();
             contextTabId = $(this).data('id');
             var contextTab = tabs.find(function (t) { return t.id === contextTabId; });
-            $contextMenu.find('[data-action="openInBrowser"], .menu-sep').toggle(!!(contextTab && contextTab.url));
+            $contextMenu.find('[data-action="openInBrowser"], [data-action="copyLink"], .menu-sep').toggle(!!(contextTab && contextTab.url));
             // 菜单是 position:fixed，靠右 / 靠下时往回收，别被窗口切掉
             $contextMenu.addClass('open');
             var left = Math.min(e.clientX, window.innerWidth - $contextMenu.outerWidth() - 4);
@@ -447,7 +519,7 @@
             hideContextMenu();
             if (id === null) return;
             if (action === 'openInBrowser') openInBrowser(id);
-            else if (action === 'close') closeTab(id);
+            else if (action === 'copyLink') copyTabLink(id);
             else if (action === 'closeOthers') closeOthers(id);
             else if (action === 'closeRight') closeRight(id);
             else if (action === 'closeLeft') closeLeft(id);

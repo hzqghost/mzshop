@@ -1,0 +1,75 @@
+{% extends "page.html" %}
+{% block title %}标准分类{% endblock %}
+{% block body %}
+<div class="page-pad shopify-taxonomy-page">
+    <div class="taxonomy-toolbar">
+        <button id="importTaxonomy" type="button"></button>
+        <span id="taxonomySummary">数据来自与当前 Admin API 版本一致的 Shopify 官方 product-taxonomy 稳定版本。</span>
+    </div>
+    <div id="taxonomyGrid"></div>
+</div>
+<script>
+var taxonomyGrid;
+
+function shopifyCall(method, path, body) {
+    return $.ajax({
+        url: APP.HOST + '/api/v1/shopify' + path, method: method,
+        contentType: 'application/json', data: body == null ? undefined : JSON.stringify(body)
+    }).then(function (res) {
+        if (!res || res.code !== 0) { return $.Deferred().reject((res && res.msg) || '请求失败').promise(); }
+        return res.data;
+    }, function (xhr) {
+        if (xhr.status === 401) { (window.top || window).location.href = APP.HOST + '/login'; }
+        return $.Deferred().reject((xhr.responseJSON && xhr.responseJSON.msg) || '请求失败').promise();
+    });
+}
+
+$(function () {
+    taxonomyGrid = new DxGrid($('#taxonomyGrid')[0], {
+        dataSource: DxGrid.remoteStore('/api/v1/shopify/taxonomy', 'id'),
+        keyExpr: 'id', businessToolbar: true,
+        remoteOperations: { paging: true, filtering: true, sorting: true },
+        headerFilter: { visible: false },
+        paging: { pageSize: 50 },
+        pager: { visible: true, showPageSizeSelector: true, allowedPageSizes: [20, 50, 100], showInfo: true },
+        columns: [
+            { dataField: 'category_id', caption: '分类 ID', width: 130 },
+            { dataField: 'name_zh', caption: '中文名称', width: 190 },
+            { dataField: 'full_name_zh', caption: '中文完整路径', minWidth: 360 },
+            { dataField: 'name_en', caption: '英文名称', width: 220 },
+            { dataField: 'full_name_en', caption: '英文完整路径', minWidth: 400, visible: false },
+            { dataField: 'level', caption: '层级', dataType: 'number', width: 75 },
+            { dataField: 'is_leaf', caption: '末级', dataType: 'boolean', width: 75 },
+            { dataField: 'is_active', caption: '有效', dataType: 'boolean', width: 75 },
+            { dataField: 'version', caption: '版本', width: 100 },
+            { dataField: 'updated_at', caption: '更新时间', dataType: 'datetime', format: 'yyyy-MM-dd HH:mm:ss', width: 165 },
+            { dataField: 'taxonomy_gid', caption: 'Taxonomy GID', minWidth: 260, visible: false },
+            { dataField: 'id', caption: 'ID', width: 80, visible: false }
+        ]
+    });
+    $('#importTaxonomy').dxButton({
+        text: '从 Shopify 更新', icon: 'refresh', type: 'default',
+        onClick: function (e) {
+            var button = e.component;
+            DevExpress.ui.dialog.confirm('将下载与当前 Admin API 版本一致的 Shopify 官方中英文标准分类。数据量较大，可能需要一两分钟，是否继续？', '更新标准分类').then(function (yes) {
+                if (!yes) { return; }
+                button.option({ disabled: true, text: '正在下载并更新...' });
+                shopifyCall('POST', '/taxonomy/import').then(function (result) {
+                    $('#taxonomySummary').text('版本 ' + result.version + '：分类 ' + result.imported + ' 条，属性 ' +
+                        (result.attributes || 0) + ' 条，属性值 ' + (result.attribute_values || 0) + ' 条，分类属性关系 ' +
+                        (result.category_attributes || 0) + ' 条，历史失效分类 ' + result.inactive + ' 条。');
+                    DevExpress.ui.notify('Shopify 标准分类更新成功', 'success', 2600);
+                    taxonomyGrid.refresh();
+                }, function (msg) {
+                    DevExpress.ui.notify(String(msg), 'error', 5000);
+                }).always(function () { button.option({ disabled: false, text: '从 Shopify 更新' }); });
+            });
+        }
+    });
+});
+</script>
+<style>
+.taxonomy-toolbar { display:flex; align-items:center; gap:14px; margin-bottom:10px; }
+#taxonomySummary { color:#666; }
+</style>
+{% endblock %}

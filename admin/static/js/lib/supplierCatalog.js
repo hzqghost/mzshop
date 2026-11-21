@@ -97,9 +97,201 @@
         { value: 2, text: '已选品' }, { value: 3, text: '已忽略' }
     ];
 
+    var DOC_TYPES = [
+        { value: 'license', text: '营业执照' },
+        { value: 'qualification', text: '资质证书' },
+        { value: 'contract', text: '合同协议' },
+        { value: 'pricelist', text: '价目表' },
+        { value: 'catalog', text: '产品资料' },
+        { value: 'other', text: '其他' }
+    ];
+
     function escapeHtml(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
             return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    /* 和产品详情同一套 HTML 编辑器：图片/文件先本地预览，保存时再上传 */
+    var MATERIAL_IMAGE_EXT = { jpg: 1, jpeg: 1, png: 1, gif: 1, webp: 1 };
+    var MATERIAL_FILE_EXT = { pdf: 1, doc: 1, docx: 1, xls: 1, xlsx: 1, ppt: 1, pptx: 1, txt: 1, csv: 1, zip: 1 };
+    var MATERIAL_IMAGE_ACCEPT = '.jpg,.jpeg,.png,.gif,.webp,image/jpeg,image/png,image/gif,image/webp';
+    var MATERIAL_FILE_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip';
+    var materialPending = {};
+
+    function materialFileError(file) {
+        var ext = ((file.name || '').split('.').pop() || '').toLowerCase();
+        var image = !!MATERIAL_IMAGE_EXT[ext];
+        if (!image && !MATERIAL_FILE_EXT[ext]) { return '仅支持图片（jpg/png/gif/webp）和文件（pdf/doc/docx/xls/xlsx/ppt/pptx/txt/csv/zip）'; }
+        if (!file.size) { return '文件是空的'; }
+        if (image && file.size > 8 * 1024 * 1024) { return '图片不能超过 8MB'; }
+        if (!image && file.size > 20 * 1024 * 1024) { return '文件不能超过 20MB'; }
+        return '';
+    }
+
+    function materialNamedFile(file) {
+        if (file.name && file.name.indexOf('.') > 0) { return file; }
+        var map = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' };
+        var ext = map[file.type] || 'bin';
+        return new File([file], 'paste.' + ext, { type: file.type });
+    }
+
+    function rememberMaterial(file) {
+        file = materialNamedFile(file);
+        var err = materialFileError(file);
+        if (err) { if (typeof apiError === 'function') { apiError(err); } return null; }
+        var id = 'lf' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        var url = URL.createObjectURL(file);
+        var image = file.type.indexOf('image/') === 0 || !!MATERIAL_IMAGE_EXT[((file.name || '').split('.').pop() || '').toLowerCase()];
+        materialPending[id] = { file: file, url: url };
+        return { id: id, url: url, name: file.name, image: image };
+    }
+
+    function insertMaterial(editor, file) {
+        var rec = rememberMaterial(file);
+        if (!rec) { return; }
+        if (rec.image) {
+            editor.insertContent('<img src="' + rec.url + '" alt="' + escapeHtml(rec.name) + '" data-local="' + rec.id + '">');
+        } else {
+            editor.insertContent('<p><a href="' + rec.url + '" target="_blank" rel="noopener" data-local="' + rec.id + '">' + escapeHtml(rec.name) + '</a></p>');
+        }
+    }
+
+    function materialFilesFromClipboard(e) {
+        var cd = e.clipboardData || (e.originalEvent && e.originalEvent.clipboardData);
+        if (!cd) { return []; }
+        if (cd.files && cd.files.length) { return Array.prototype.slice.call(cd.files); }
+        var out = [];
+        if (cd.items) {
+            for (var i = 0; i < cd.items.length; i++) {
+                if (cd.items[i].kind === 'file') {
+                    var f = cd.items[i].getAsFile();
+                    if (f) { out.push(f); }
+                }
+            }
+        }
+        return out;
+    }
+
+    function pickMaterial(editor, accept) {
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.accept = accept;
+        input.onchange = function () {
+            if (input.files && input.files[0]) { insertMaterial(editor, input.files[0]); }
+        };
+        input.click();
+    }
+
+    function uploadMaterialFile(file) {
+        var fd = new FormData();
+        fd.append('file', file, file.name || 'file');
+        return $.ajax({
+            url: APP.HOST + BASE + '/uploads',
+            method: 'POST', data: fd, processData: false, contentType: false
+        }).then(function (res) {
+            if (res.code !== 0) { return $.Deferred().reject(res.msg).promise(); }
+            return res.data;
+        }, function (xhr) {
+            if (xhr.status === 401) { (window.top || window).location.href = APP.HOST + '/login'; }
+            return $.Deferred().reject((xhr.responseJSON && xhr.responseJSON.msg) || '上传失败').promise();
+        });
+    }
+
+    function flushMaterialEditor(editor) {
+        if (!editor) { return $.Deferred().resolve([]).promise(); }
+        var body = editor.getBody();
+        var nodes = body.querySelectorAll('[data-local]');
+        var kept = [];
+        for (var i = 0; i < nodes.length; i++) {
+            var id = nodes[i].getAttribute('data-local');
+            if (materialPending[id] && kept.indexOf(id) < 0) { kept.push(id); }
+        }
+        Object.keys(materialPending).forEach(function (id) {
+            if (kept.indexOf(id) < 0) {
+                URL.revokeObjectURL(materialPending[id].url);
+                delete materialPending[id];
+            }
+        });
+        var uploaded = [];
+        var chain = $.Deferred().resolve().promise();
+        kept.forEach(function (id) {
+            chain = chain.then(function () {
+                return uploadMaterialFile(materialPending[id].file).then(function (res) {
+                    var els = editor.getBody().querySelectorAll('[data-local="' + id + '"]');
+                    for (var n = 0; n < els.length; n++) {
+                        if (els[n].tagName === 'A') { els[n].setAttribute('href', res.url); }
+                        else { els[n].setAttribute('src', res.url); }
+                        els[n].removeAttribute('data-local');
+                    }
+                    URL.revokeObjectURL(materialPending[id].url);
+                    delete materialPending[id];
+                    uploaded.push(res.url);
+                });
+            });
+        });
+        return chain.then(function () { return uploaded; });
+    }
+
+    function discardMaterialPending() {
+        Object.keys(materialPending).forEach(function (id) {
+            URL.revokeObjectURL(materialPending[id].url);
+            delete materialPending[id];
+        });
+    }
+
+    function initMaterialEditor(selector, html, opts) {
+        opts = opts || {};
+        var height = opts.height || 800;
+        if (window.tinymce) { tinymce.remove(selector); }
+        return tinymce.init({
+            selector: selector,
+            license_key: 'gpl',
+            language: 'zh-CN',
+            language_url: '/static/js/plugins/tinymce/langs/zh-CN.js',
+            height: height,
+            min_height: height,
+            menubar: false,
+            branding: false,
+            promotion: false,
+            statusbar: false,
+            toolbar_mode: 'wrap',
+            convert_urls: false,
+            extended_valid_elements: 'img[src|alt|width|height|style|class|data-local],a[href|target|rel|class|style|data-local]',
+            paste_data_images: false,
+            automatic_uploads: false,
+            images_file_types: 'jpg,jpeg,png,gif,webp',
+            plugins: 'advlist autolink lists link image table code wordcount fullscreen',
+            toolbar: 'undo redo | blocks | bold italic underline strikethrough | forecolor backcolor | alignleft aligncenter alignright alignjustify | bullist numlist | link uploadimage uploadfile table | removeformat code fullscreen',
+            content_style: 'body{font-family:"Microsoft YaHei",Arial,sans-serif;font-size:14px;} img{max-width:100%;height:auto;}',
+            setup: function (editor) {
+                editor.ui.registry.addButton('uploadimage', {
+                    icon: 'image',
+                    tooltip: '插入图片',
+                    onAction: function () { pickMaterial(editor, MATERIAL_IMAGE_ACCEPT); }
+                });
+                editor.ui.registry.addButton('uploadfile', {
+                    text: '文件',
+                    tooltip: '上传文件',
+                    onAction: function () { pickMaterial(editor, MATERIAL_FILE_ACCEPT); }
+                });
+                editor.on('paste', function (e) {
+                    var files = materialFilesFromClipboard(e);
+                    if (!files.length) { return; }
+                    e.preventDefault();
+                    files.forEach(function (file) { insertMaterial(editor, file); });
+                }, true);
+                editor.on('drop', function (e) {
+                    var dt = e.dataTransfer;
+                    if (!dt || !dt.files || !dt.files.length) { return; }
+                    e.preventDefault();
+                    Array.prototype.forEach.call(dt.files, function (file) { insertMaterial(editor, file); });
+                }, true);
+                editor.on('init', function () {
+                    if (html) { editor.setContent(html); }
+                    if (editor.mode && editor.mode.get() !== 'design') { editor.mode.set('design'); }
+                });
+            }
         });
     }
 
@@ -107,12 +299,15 @@
 
     var SUP = {
         call: call, upload: upload, supplierSource: supplierSource, brandSource: brandSource, currencySource: currencySource,
-        STATUSES: STATUSES, escapeHtml: escapeHtml,
+        STATUSES: STATUSES, DOC_TYPES: DOC_TYPES, escapeHtml: escapeHtml,
         notifyChanged: function (kind) { if (channel) { channel.postMessage({ kind: kind }); } },
         onChanged: function (kind, cb) {
             if (channel) { channel.addEventListener('message', function (e) { if (e.data && e.data.kind === kind) { cb(); } }); }
         },
-        openImportWizard: openImportWizard
+        openImportWizard: openImportWizard,
+        initMaterialEditor: initMaterialEditor,
+        flushMaterialEditor: flushMaterialEditor,
+        discardMaterialPending: discardMaterialPending
     };
     window.SUP = SUP;
 
@@ -124,8 +319,19 @@
         { value: 'name', text: '产品名称（必填）' },
         { value: 'brand_name', text: '品牌' },
         { value: 'category_name', text: '分类' },
-        { value: 'price', text: '价格' },
-        { value: 'currency', text: '币种（通用属性里的编码，如 CNY）' },
+        { value: 'purchase_price', text: '采购价' },
+        { value: 'region_name', text: '区域（区域价格按这个名称对应）' },
+        { value: 'price', text: '价格（按区域）' },
+        { value: 'suggested_price', text: '建议售价（按区域）' },
+        { value: 'min_price', text: '最低售价（按区域）' },
+        { value: 'max_price', text: '最高售价（按区域）' },
+        { value: 'shipping_fee', text: '运费（按区域）' },
+        { value: 'arrival_days_min', text: '最快到达天数（按区域）' },
+        { value: 'arrival_days_max', text: '最慢到达天数（按区域）' },
+        { value: 'tax', text: '税费（按区域）' },
+        { value: 'price_rule', text: '价格规则' },
+        { value: 'lead_time', text: '交期' },
+        { value: 'currency', text: '币种（按区域，通用属性里的编码，如 CNY）' },
         { value: 'stock', text: '库存' },
         { value: 'moq', text: '起订量' },
         { value: 'main_image_url', text: '图片链接' },
@@ -151,7 +357,7 @@
         var btnBack, btnNext, dupMode, saveMap, fileUp;
         var $el = $('<div></div>').appendTo(document.body);
         var popup = $el.dxPopup({
-            title: 'Excel 导入供应商产品', width: 960, height: '90%', showTitle: true, dragEnabled: true,
+            title: 'Excel 导入供应商产品', width: '90%', maxWidth: 960, height: '90%', showTitle: true, dragEnabled: true,
             hideOnOutsideClick: false, showCloseButton: true,
             onShown: function () { go(1); },
             onHidden: function () { $el.remove(); },
@@ -347,7 +553,7 @@
             var $c = $('#wizPreview').empty();
             if (!state.preview) { return; }
             $('<div id="wizPreviewGrid"></div>').appendTo($c);
-            $('#wizPreviewGrid').dxDataGrid({
+            $('#wizPreviewGrid').dxDataGrid($.extend({}, DxGrid.headerMenuOptions(false), {
                 dataSource: state.preview.rows,
                 columns: state.preview.columns.map(function (c) {
                     return { dataField: c.key, caption: c.name, width: 160, allowFiltering: false, allowSorting: false };
@@ -356,7 +562,7 @@
                 filterRow: { visible: false }, headerFilter: { visible: false },
                 paging: { pageSize: 10 }, pager: { visible: true, showInfo: true, allowedPageSizes: [10, 20] },
                 height: 300, noDataText: '没有可预览的数据'
-            });
+            }));
         }
 
         function doImport() {

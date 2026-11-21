@@ -21,10 +21,18 @@
         ctor: function (el, options) {
             options = options || {};
             if (typeof options.rowReorder === 'function') { options = $.extend({}, options, { rowDragging: DxGrid._rowDragging(options.rowReorder) }); }
-            // DevExtreme 24.1 缺陷：masterDetail 的展开图标在 columnFixing 开启、或表格里有 fixed 列时都不渲染
-            // （单元格只剩 &nbsp;，只能靠 expandRow API）。必须在创建时处理（_init 里再改不生效）：
-            // 关掉列固定，并替换默认的 fixCommandColumns（不固定勾选列/操作列）；页面自己的 customizeColumns 仍执行
-            if (options.masterDetail === true || (options.masterDetail && options.masterDetail.enabled)) {
+            // 公共列契约要在创建时写进列定义（visible 只在页面没写时补默认值）。
+            // 不能放到 customizeColumns 里强制改 visible：那里每次重算列都会跑，会盖掉列选择器和已记住的布局。
+            var masterDetail = options.masterDetail === true || !!(options.masterDetail && options.masterDetail.enabled);
+            // 带展开行时，DevExtreme 24.1 会把展开列钉住后把图标清成 &nbsp;。
+            // 默认关掉列固定。页面传 keepColumnFixing:true 时保留固定列，并在行渲染后把图标补回去。
+            var keepFix = masterDetail && options.keepColumnFixing === true;
+            if (Array.isArray(options.columns)) {
+                options = $.extend({}, options, {
+                    columns: DxGrid.prepareColumns(options.columns, { skipFix: (masterDetail && !keepFix) || options.dxFeatures === false })
+                });
+            }
+            if (masterDetail && !keepFix) {
                 var mdFixes = {};
                 if (!(options.columnFixing && options.columnFixing.enabled === false)) {
                     mdFixes.columnFixing = { enabled: false };
@@ -32,10 +40,33 @@
                 var mdPageCC = options.customizeColumns;
                 mdFixes.customizeColumns = function (columns) {
                     if (typeof mdPageCC === 'function') { mdPageCC.call(this, columns); }
+                    (columns || []).forEach(function (c) { c.fixed = false; });
                 };
                 options = $.extend({}, options, mdFixes);
             }
+            if (keepFix) {
+                var pageRowPrepared = options.onRowPrepared;
+                options = $.extend({}, options, {
+                    onRowPrepared: function (e) {
+                        DxGrid.repairDetailExpandRow(e);
+                        if (typeof pageRowPrepared === 'function') { pageRowPrepared.apply(this, arguments); }
+                    }
+                });
+            }
             this.callBase(el, options);
+            // 高度必须在 DevExtreme 构造完成后接管；放在 _init 里会被组件后续初始化覆盖回 null。
+            if (this.option('autoHeight') && this.option('height') == null) {
+                var self = this;
+                this._autoHeightManaged = true;
+                this.option('height', DxGrid.autoHeight(this.element()));
+                this._onWinResize = function () { DxGrid.syncAutoHeight(self); };
+                $(window).on('resize', this._onWinResize);
+            }
+            // 独立业务栏要等 DataGrid 完成初始化后再挂到根元素前；在 _init 中创建会被组件后续渲染覆盖。
+            if (this.option('businessToolbar')) {
+                DxGrid._initBusinessToolbar(this);
+                this.updateDimensions();
+            }
         },
 
         _getDefaultOptions: function () {
@@ -66,10 +97,11 @@
                 // 以下是「标准功能」默认全开；子表 / 小表格传 dxFeatures: false 关掉整套
                 dxFeatures: true,
                 selection: { mode: 'multiple', showCheckBoxesMode: 'always', selectAllMode: 'page' }, // 默认多选列
-                columnFixing: { enabled: true },   // 列头右键菜单：升序 / 降序 / 清除排序 / 固定（向左、向右）/ 不固定
+                columnFixing: { enabled: true },   // 列头右键：固定（向左、向右）/ 不固定
                 filterPanel: { visible: true },    // 过滤器：底部过滤面板，点开是过滤器构建器（带「模板」）
-                groupPanel: { visible: true },     // 拖动列标题到此处分组（服务端分页的表格会自动关掉）
-                grouping: { contextMenuEnabled: true },
+                groupPanel: { visible: true },     // 拖动列标题到此处分组（服务端分页的表格会自动关掉面板）
+                grouping: { contextMenuEnabled: true }, // 列头右键：通过该列分组 / 取消所有分组
+
                 columnChooser: { enabled: true, mode: 'select' },
                 customizeColumns: DxGrid.fixCommandColumns,
                 stateStoring: DxGrid._stateOptions(self)
@@ -80,11 +112,6 @@
             this.callBase();
             var self = this;
             $(this.element()).data('dxGrid', this); // new DxGrid(el) 和 $(el).dxGrid() 两种创建方式都能 $(el).dxGrid('instance') 取到
-            if (this.option('autoHeight') && this.option('height') === undefined) {
-                this.option('height', function () { return DxGrid.autoHeight(self.element()); });
-                this._onWinResize = function () { self.updateDimensions(); };
-                $(window).on('resize', this._onWinResize);
-            }
             if (!this.option('dxFeatures')) {
                 this.option({
                     selection: { mode: 'none' }, filterPanel: { visible: false }, groupPanel: { visible: false },
@@ -92,10 +119,11 @@
                 });
                 return;
             }
-            // 服务端分页 / 筛选的表格不支持分组（分组要服务端配合），关掉分组面板
+            // 尚未迁移到两行布局的服务端分页表格继续隐藏分组面板。
+            // 启用 businessToolbar 的新布局保留分组区，页面须把 remoteOperations.grouping 设为 false，分组仅作用于当前已加载数据。
             var ro = this.option('remoteOperations');
-            if (ro && typeof ro === 'object' && (ro.paging || ro.filtering)) {
-                this.option({ groupPanel: { visible: false }, grouping: { contextMenuEnabled: false } });
+            if (!this.option('businessToolbar') && ro && typeof ro === 'object' && (ro.paging || ro.filtering)) {
+                this.option({ groupPanel: { visible: false } });
             }
             this._gridKey = this.option('gridKey') || location.pathname;
             this._stateKey = 'dxGrid:' + this._gridKey;
@@ -107,16 +135,20 @@
                 if (savedMode && DxGrid.EDIT_MODES.some(function (m) { return m.id === savedMode; })) { this.option('editing.mode', savedMode); }
             }
             DxGrid._initFilterBuilderPopup(this);
-            // 工具栏：刷新 / 批量（含查看已选）/ 重置 / 导出 / 编辑模式 / 设置；页面自己的 onToolbarPreparing 在后面执行，还能再增删
+            // Grid 工具栏：左侧刷新 / 查询已选 / 重置 / 分组区；右侧导出 / 编辑模式 / 设置 / 列选择器。
             var userToolbar = this.option('onToolbarPreparing');
             this.option('onToolbarPreparing', function (e) {
                 DxGrid._buildToolbar(self, e);
                 if (userToolbar) { userToolbar.apply(this, arguments); }
+                DxGrid._placeGroupPanel(e.toolbarOptions.items);
+                DxGrid._placeColumnChooser(e.toolbarOptions.items, self);
             });
         },
 
         _dispose: function () {
             if (this._onWinResize) { $(window).off('resize', this._onWinResize); }
+            if (this._businessToolbarResizeObserver) { this._businessToolbarResizeObserver.disconnect(); }
+            if (this._businessToolbarEl) { this._businessToolbarEl.remove(); this._businessToolbarEl = null; }
             this.callBase();
         }
     });
@@ -154,49 +186,214 @@
                 allowedPageSizes: [10, 20, 50, 100, 500]
             }
         };
-        if (s.fixedCommand === false) {
-            // 用户在「Grid 配置」里明确关掉了冻结：不固定勾选列和操作列
-            options.customizeColumns = function () { };
-        }
         return options;
     };
 
-    /** 树形表格（dxTreeList）用的同一套标准功能：多选列、列头右键菜单、过滤行 / 表头筛选 / 过滤面板、列选择器、固定列 */
-    DxGrid.treeOptions = function () {
-        return {
-            selection: { mode: 'multiple', showCheckBoxesMode: 'always', recursive: false },
-            columnFixing: { enabled: true },
-            filterRow: { visible: true },
-            headerFilter: { visible: true, search: { enabled: true, editorOptions: { placeholder: '搜索...' } } }, // 表头筛选里带搜索框
-            filterPanel: { visible: true },
-            columnChooser: { enabled: true, mode: 'select' },
+    /**
+     * 列头右键菜单（图 1）：升序排序、降序排序、清除排序、通过该列分组、取消所有分组、固定（向左 / 向右）、不固定。
+     * 排序来自 sorting，分组来自 grouping.contextMenuEnabled，固定来自 columnFixing。
+     * 没走 DxGrid 的 dxDataGrid / dxTreeList 用 $.extend({}, DxGrid.headerMenuOptions(), { ...页面选项 })。
+     * withChooser 传 false 时不打开列选择器（窄列表、没有默认隐藏列时）。
+     */
+    DxGrid.headerMenuOptions = function (withChooser) {
+        var options = {
             sorting: { mode: 'multiple' },
-            customizeColumns: DxGrid.fixCommandColumns
+            grouping: { contextMenuEnabled: true },
+            columnFixing: { enabled: true }
         };
+        if (withChooser !== false) { options.columnChooser = { enabled: true, mode: 'select' }; }
+        return options;
     };
 
-    /** 勾选列固定在左、操作列（图标按钮）固定在右 */
-    DxGrid.fixCommandColumns = function (columns) {
-        columns.forEach(function (c) {
-            if (c.type === 'selection') { c.fixed = true; c.fixedPosition = 'left'; }
-            if (c.type === 'buttons') { c.fixed = true; c.fixedPosition = 'right'; }
+    /** 树形表格（dxTreeList）用的同一套标准功能：多选列、列头右键菜单、过滤行 / 表头筛选 / 过滤面板、列选择器、固定列、布局记忆 */
+    DxGrid.treeOptions = function () {
+        return $.extend({}, DxGrid.headerMenuOptions(), {
+            selection: { mode: 'multiple', showCheckBoxesMode: 'always', recursive: false },
+            filterRow: { visible: true },
+            headerFilter: { visible: true, search: { enabled: true, editorOptions: { placeholder: '搜索...' } } },
+            filterPanel: { visible: true },
+            customizeColumns: DxGrid.fixCommandColumns,
+            stateStoring: DxGrid._stateOptions(null)
         });
+    };
+
+    /**
+     * 默认隐藏、但仍出现在列选择器里的列。
+     * 只认主键 id、审计时间、创建人、最后操作人。外键（category_id、goods_id 等）和标题「商品ID」不在这里。
+     */
+    DxGrid.AUDIT_FIELDS = {
+        id: 1,
+        created_at: 1, create_time: 1, createdAt: 1,
+        updated_at: 1, update_time: 1, updatedAt: 1,
+        created_by: 1, creator: 1, creator_name: 1, created_by_name: 1,
+        updated_by: 1, last_operator: 1, last_operator_name: 1, updated_by_name: 1
+    };
+    DxGrid.AUDIT_CAPTIONS = { ID: 1, '创建时间': 1, '更新时间': 1, '创建人': 1, '最后操作人': 1 };
+
+    DxGrid.isAuditColumn = function (col) {
+        if (!col || col.type === 'buttons' || col.type === 'selection' || col.command) { return false; }
+        var field = col.dataField || col.name;
+        if (field && DxGrid.AUDIT_FIELDS[field]) { return true; }
+        return !!(col.caption && DxGrid.AUDIT_CAPTIONS[col.caption]);
+    };
+
+    DxGrid.isActionColumn = function (col) {
+        return !!(col && (col.type === 'buttons' || col.command === 'edit' || col.caption === '操作'));
+    };
+
+    /**
+     * 公共列契约（创建时调用一次）：
+     * - ID / 创建时间 / 更新时间 / 创建人 / 最后操作人：页面没写 visible 时默认隐藏，列选择器里可以勾回来
+     * - 操作列默认固定在右侧（页面写了 fixed，或 skipFix：主从展开 / dxFeatures:false，则不动）
+     * 浅拷贝列对象，避免把 lookup 的 CustomStore、cellTemplate 克隆坏。
+     */
+    DxGrid.prepareColumns = function (columns, opts) {
+        opts = opts || {};
+        if (!Array.isArray(columns)) { return columns; }
+        return columns.map(function (c) {
+            if (typeof c === 'string') { c = { dataField: c }; }
+            if (!c || typeof c !== 'object') { return c; }
+            var col = $.extend({}, c);
+            if (DxGrid.isAuditColumn(col)) {
+                if (col.visible === undefined) { col.visible = false; }
+                if (col.showInColumnChooser === undefined) { col.showInColumnChooser = true; }
+            }
+            if (!opts.skipFix && DxGrid.isActionColumn(col) && col.fixed === undefined) {
+                col.fixed = true;
+                col.fixedPosition = 'right';
+            }
+            return col;
+        });
+    };
+
+    /** 勾选列固定在左、操作列固定在右。「Grid 配置」里关掉冻结时不改，方便右键「不固定」留下来 */
+    DxGrid.fixCommandColumns = function (columns) {
+        var s = (window.APP && APP.GRID_STYLE) || {};
+        if (s.fixedCommand === false) { return; }
+        (columns || []).forEach(function (c) {
+            if (c.type === 'selection' || c.command === 'select') { c.fixed = true; c.fixedPosition = 'left'; }
+            if (c.type === 'buttons' || c.command === 'edit' || c.caption === '操作') { c.fixed = true; c.fixedPosition = 'right'; }
+        });
+    };
+
+    /**
+     * DevExtreme 24.1：展开列一旦被钉住，固定表里的单元格内容会被清成 &nbsp;，图标和点击都没了。
+     * keepColumnFixing 的表格在行画完后把箭头补上，并自己处理展开/收起。
+     */
+    DxGrid.repairDetailExpandRow = function (e) {
+        if (!e || e.rowType !== 'data' || !e.rowElement || e.isNewRow) { return; }
+        var open = !!e.isExpanded;
+        $(e.rowElement).each(function () {
+            $(this).children('td.dx-command-expand').each(function () {
+                var $td = $(this);
+                if ($td.find('.dx-datagrid-group-opened, .dx-datagrid-group-closed').length) { return; }
+                $td.addClass('dx-datagrid-expand dx-selection-disabled').removeClass('dx-pointer-events-none').empty();
+                $('<div>').addClass(open ? 'dx-datagrid-group-opened' : 'dx-datagrid-group-closed').appendTo($td);
+                $td.on('click', function (ev) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    var grid = e.component;
+                    if (!grid) { return; }
+                    if (grid.isRowExpanded(e.key)) { grid.collapseRow(e.key); }
+                    else { grid.expandRow(e.key); }
+                });
+            });
+        });
+    };
+
+    /** 列选择器放到工具栏最右侧（公共规则的最后一项） */
+    DxGrid._placeColumnChooser = function (items, grid) {
+        if (!items) { return; }
+        var idx = -1;
+        items.forEach(function (it, i) { if (it.name === 'columnChooserButton') { idx = i; } });
+        if (idx >= 0 && grid) {
+            var item = items[idx];
+            item.options = $.extend({}, item.options, {
+                onClick: function (e) {
+                    var buttonEl = e && e.element ? e.element : null;
+                    DxGrid.prepareColumnChooser(grid, buttonEl);
+                    grid.showColumnChooser();
+                }
+            });
+        }
+        if (idx >= 0 && idx !== items.length - 1) { items.push(items.splice(idx, 1)[0]); }
+    };
+
+    /** 列选择器默认紧贴工具栏按钮下方，并延伸到接近页面底部。 */
+    DxGrid.prepareColumnChooser = function (grid, buttonElement) {
+        var $button = $(buttonElement || grid.element()).closest('.dx-button');
+        if (!$button.length) {
+            $button = $(grid.element()).find('.dx-datagrid-column-chooser-button, .dx-treelist-column-chooser-button').last();
+        }
+        var button = $button[0] && $button[0].getBoundingClientRect();
+        var root = $(grid.element())[0] && $(grid.element())[0].getBoundingClientRect();
+        if (!button || !root) { return; }
+        // DevExtreme 的 ColumnChooser 自带约 18px 外层偏移，这里预抵消，最终与按钮保持约 8px 间距。
+        var offsetY = Math.round(button.bottom - root.top - 10);
+        var height = Math.max(220, Math.floor(window.innerHeight - button.bottom - 18));
+        grid.option('columnChooser.height', height);
+        grid.option('columnChooser.position', {
+            my: 'right top', at: 'right top', offset: '-2 ' + offsetY, collision: 'fit'
+        });
+    };
+
+    /** 分组区放在左侧三个公共按钮之后；DevExtreme 默认会把它插在最前。 */
+    DxGrid._placeGroupPanel = function (items) {
+        if (!items) { return; }
+        var idx = -1;
+        items.forEach(function (it, i) { if (it.name === 'groupPanel') { idx = i; } });
+        if (idx >= 0) { items.push(items.splice(idx, 1)[0]); }
     };
 
 
     /* ================================================================ 布局记忆 */
     // 列宽、顺序、显隐、固定、排序、每页条数记在浏览器本地（按页面路径）；筛选 / 搜索 / 页码 / 选中行不记，免得下次打开莫名其妙是过滤后的结果
+    DxGrid._stateKeyOf = function (grid) {
+        var gridKey = '';
+        try { gridKey = grid && grid.option ? grid.option('gridKey') : ''; } catch (e) { gridKey = ''; }
+        return 'dxGrid:' + (gridKey || location.pathname);
+    };
+
+    /**
+     * 读本地布局。旧布局是在审计列默认显示时存下来的，第一次读取把这些列的 visible 收成 false 并打标记，
+     * 之后列选择器再勾出来的选择会留下来。没存过必须返回 {}，返回 null 会把列清空。
+     * masterDetail 表格不能带 fixed（展开图标不渲染），读出来时去掉。
+     */
+    DxGrid._readGridState = function (storageKey, grid) {
+        var state = {};
+        try { state = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch (e) { state = {}; }
+        if (!state || typeof state !== 'object') { state = {}; }
+        var flagKey = storageKey + ':auditHide';
+        var done = false;
+        try { done = localStorage.getItem(flagKey) === '1'; } catch (e) { done = false; }
+        if (!done) {
+            (state.columns || []).forEach(function (col) {
+                if (DxGrid.isAuditColumn(col)) { col.visible = false; }
+            });
+            try { localStorage.setItem(flagKey, '1'); } catch (e) { /* 记不住就每次打开再收一次 */ }
+        }
+        var md = false;
+        try {
+            var master = grid && grid.option ? grid.option('masterDetail') : null;
+            md = master === true || !!(master && master.enabled);
+        } catch (e) { md = false; }
+        var keepFix = false;
+        try { keepFix = grid && grid.option && grid.option('keepColumnFixing') === true; } catch (e2) { keepFix = false; }
+        if (md && !keepFix && state.columns) {
+            state.columns.forEach(function (col) { delete col.fixed; delete col.fixedPosition; });
+        }
+        return state;
+    };
+
+    DxGrid._writeGridState = function (storageKey, state) {
+        try { localStorage.setItem(storageKey, JSON.stringify(DxGrid._sanitizeState(state))); } catch (e) { /* 存不了就只对本次有效 */ }
+    };
+
     DxGrid._stateOptions = function (grid) {
-        function key() { return 'dxGrid:' + (grid.option('gridKey') || location.pathname); }
         return {
             enabled: true, type: 'custom',
-            customLoad: function () {
-                // 没存过要返回 {} 而不是 null：返回 null 会让表格把列清空（实测整个表格空白）
-                try { return JSON.parse(localStorage.getItem(key()) || '{}') || {}; } catch (e) { return {}; }
-            },
-            customSave: function (state) {
-                try { localStorage.setItem(key(), JSON.stringify(DxGrid._sanitizeState(state))); } catch (e) { /* 存不了就只对本次有效 */ }
-            }
+            customLoad: function () { return DxGrid._readGridState(DxGrid._stateKeyOf(grid), grid); },
+            customSave: function (state) { DxGrid._writeGridState(DxGrid._stateKeyOf(grid), state); }
         };
     };
 
@@ -219,6 +416,7 @@
         grid._selectedOnly = false;
         grid._selectedOnlyReturn = null;
         DxGrid._repaintBatchMenu(grid);
+        (grid._businessQueryResetters || []).forEach(function (reset) { reset(); });
         grid.clearFilter();
         grid.option('filterValue', null);
         grid.clearSorting();
@@ -241,6 +439,12 @@
     /** 重绘批量菜单，刷新「查看已选」的打勾（同编辑方式菜单：弹层 DOM 会缓存，得给它新数组才会重新渲染） */
     DxGrid._repaintBatchMenu = function (grid) {
         if (grid._batchDD) { grid._batchDD.option('items', (grid._batchDD.option('items') || []).slice()); }
+        if (grid._selectedButton) {
+            grid._selectedButton.option({
+                type: grid._selectedOnly ? 'default' : 'normal',
+                hint: grid._selectedOnly ? '退出查询已选' : '查询已选'
+            });
+        }
     };
 
     /** 查看已选：只显示勾选过的行。在当前筛选上叠加主键 anyof 过滤，再点一次回到之前的筛选；勾选的行在退出前记下来，翻页 / 取消勾选不影响 */
@@ -287,17 +491,98 @@
             if (!row || !row.layout) { DevExpress.ui.notify('这个表格还没有保存过布局', 'warning', 1800); return; }
             DxGrid.resetView(grid);
             if (row.layout.editMode) { DxGrid.setEditMode(grid, row.layout.editMode); }
-            grid.state(row.layout.state);
+            var st = row.layout.state || {};
+            var master = grid.option('masterDetail');
+            if ((master === true || (master && master.enabled)) && grid.option('keepColumnFixing') !== true) {
+                st = $.extend(true, {}, st);
+                (st.columns || []).forEach(function (col) { delete col.fixed; delete col.fixedPosition; });
+            }
+            grid.state(st);
             grid.refresh();
             DevExpress.ui.notify('已恢复保存的布局', 'success', 1800);
         }, function (msg) { DevExpress.ui.notify('恢复布局失败：' + msg, 'error', 3000); });
     };
 
     /* ================================================================ 工具栏 */
+    /** 独立业务工具栏：查询控件在左，新增 / 编辑 / 删除 / 批量动作统一收进右侧「操作」。 */
+    DxGrid._initBusinessToolbar = function (grid, suppliedConfig) {
+        var cfg = suppliedConfig !== undefined ? suppliedConfig : grid.option('businessToolbar');
+        cfg = cfg === true ? {} : (cfg || {});
+        grid._hasBusinessToolbar = true;
+        if (grid._businessToolbarEl) { grid._businessToolbarEl.remove(); }
+        var $bar = $('<div class="dxgrid-business-toolbar"></div>').insertBefore(grid.element());
+        grid._businessToolbarEl = $bar;
+        var items = (cfg.queryItems || []).map(function (it) { return $.extend({ location: 'before' }, it); });
+        var menuItems = [];
+        var custom = cfg.actions || [];
+        custom.forEach(function (a) { menuItems.push({ id: 'custom:' + a.id, text: a.text, icon: a.icon, beginGroup: !!a.beginGroup }); });
+        var ed = grid.option('editing') || {};
+        var editTexts = ed.texts || {};
+        if (ed.allowAdding) {
+            menuItems.push({ id: '__add', text: editTexts.addRow || '新增', icon: 'add', beginGroup: custom.length > 0 });
+        }
+        if (ed.allowUpdating) {
+            menuItems.push({ id: '__edit', text: editTexts.editRow || '编辑选中', icon: 'edit' });
+        }
+        if (grid.option('batchDelete') || ed.allowDeleting) {
+            menuItems.push({ id: '__delete', text: cfg.deleteText || '删除选中', icon: 'trash', beginGroup: custom.length > 0 && !ed.allowAdding && !ed.allowUpdating });
+        }
+        var batchActions = grid.option('batchActions') || [];
+        batchActions.forEach(function (a, i) {
+            menuItems.push({ id: 'batch:' + a.id, text: a.text, icon: a.icon, beginGroup: i === 0 && menuItems.length > 0 });
+        });
+        if (menuItems.length) {
+            items.push({
+                location: 'after', widget: 'dxDropDownButton',
+                options: {
+                    text: cfg.actionText || '操作', icon: cfg.actionIcon || 'edit', stylingMode: 'text', showArrowIcon: true,
+                    items: menuItems, displayExpr: 'text', keyExpr: 'id', useSelectMode: false,
+                    dropDownOptions: { width: cfg.actionMenuWidth || 210 },
+                    onItemClick: function (e) {
+                        var id = e.itemData.id;
+                        if (id === '__add') { grid.addRow(); return; }
+                        if (id === '__edit') {
+                            var keys = grid.getSelectedRowKeys();
+                            if (keys.length !== 1) { DevExpress.ui.notify('请勾选一条要编辑的记录', 'warning', 1800); return; }
+                            var rowIndex = grid.getRowIndexByKey(keys[0]);
+                            if (rowIndex < 0) { DevExpress.ui.notify('选中记录不在当前页，请先查询已选', 'warning', 2200); return; }
+                            grid.editRow(rowIndex);
+                            return;
+                        }
+                        if (id === '__delete') { DxGrid.batchDelete(grid); return; }
+                        if (id.indexOf('custom:') === 0) {
+                            var ca = custom.filter(function (x) { return x.id === id.slice(7); })[0];
+                            if (ca && typeof ca.run === 'function') { ca.run(grid); }
+                            return;
+                        }
+                        if (id.indexOf('batch:') === 0) {
+                            var ba = batchActions.filter(function (x) { return x.id === id.slice(6); })[0];
+                            if (ba) { DxGrid.runBatchAction(grid, ba); }
+                        }
+                    }
+                }
+            });
+        }
+        $bar.dxToolbar({ items: items });
+        // 挂载后元素 top 已改变，立即按新位置重算；工具栏换行时继续自动重算。
+        DxGrid.syncAutoHeight(grid);
+        if (window.ResizeObserver && grid._autoHeightManaged) {
+            if (grid._businessToolbarResizeObserver) { grid._businessToolbarResizeObserver.disconnect(); }
+            grid._businessToolbarResizeObserver = new ResizeObserver(function () { DxGrid.syncAutoHeight(grid); });
+            grid._businessToolbarResizeObserver.observe($bar[0]);
+        }
+    };
+
     DxGrid._buildToolbar = function (grid, e) {
         var items = e.toolbarOptions.items;
-        function btn(icon, hint, onClick) {
-            return { location: 'after', widget: 'dxButton', options: { icon: icon, hint: hint, stylingMode: 'text', onClick: onClick } };
+        // 两行布局中，新增 / 编辑 / 删除属于业务动作，不能再留在 Grid 自带工具栏。
+        if (grid._hasBusinessToolbar || grid.option('businessToolbar')) {
+            for (var i = items.length - 1; i >= 0; i--) {
+                if (items[i].name === 'addRowButton') { items.splice(i, 1); }
+            }
+        }
+        function btn(location, icon, hint, onClick, initialized) {
+            return { location: location, widget: 'dxButton', options: { icon: icon, hint: hint, stylingMode: 'text', onClick: onClick, onInitialized: initialized } };
         }
         function menu(icon, hint, list, onItem) {
             return {
@@ -308,32 +593,34 @@
                 }
             };
         }
-        items.push(btn('refresh', '刷新', function () { grid.refresh(); }));
+        items.push(btn('before', 'refresh', '刷新', function () { grid.refresh(); }));
+        items.push(btn('before', 'selectall', '查询已选', function () { DxGrid.toggleSelectedOnly(grid); }, function (a) {
+            grid._selectedButton = a.component;
+        }));
+        items.push(btn('before', 'revert', '重置：清除筛选、搜索、排序、分组和选中', function () { DxGrid.resetView(grid); }));
         // 批量操作（勾选框图标）：「查看已选」永远排第一；之后是删除（表格允许删除或页面给了 batchDelete）+ 页面自定义的 batchActions: [{id, text, confirm?, successText?, run(keys)}]
         var actions = grid.option('batchActions') || [];
         var ed = grid.option('editing') || {};
-        var batch = [{ id: '__viewSelected', text: '查看已选' }];
-        if (grid.option('batchDelete') || ed.allowDeleting) { batch.push({ id: '__delete', text: '删除选中行' }); }
-        actions.forEach(function (a) { batch.push({ id: a.id, text: a.text }); });
-        items.push({
-            location: 'after', widget: 'dxDropDownButton',
-            options: {
-                icon: 'selectall', hint: '批量操作（对勾选的行）', stylingMode: 'text', showArrowIcon: true, items: batch, displayExpr: 'text', keyExpr: 'id',
-                useSelectMode: false, dropDownOptions: { width: 190 },
-                itemTemplate: function (it) {
-                    return $('<div></div>').text((it.id === '__viewSelected' ? (grid._selectedOnly ? '\u2713 ' : '\u3000') : '') + it.text);
-                },
-                onInitialized: function (a) { grid._batchDD = a.component; },
-                onItemClick: function (a) {
-                    var id = a.itemData.id;
-                    if (id === '__viewSelected') { DxGrid.toggleSelectedOnly(grid); return; }
-                    if (id === '__delete') { DxGrid.batchDelete(grid); return; }
-                    var x = actions.filter(function (v) { return v.id === id; })[0];
-                    if (x) { DxGrid.runBatchAction(grid, x); }
-                }
+        if (!(grid._hasBusinessToolbar || grid.option('businessToolbar'))) {
+            var batch = [];
+            if (grid.option('batchDelete') || ed.allowDeleting) { batch.push({ id: '__delete', text: '删除选中行' }); }
+            actions.forEach(function (a) { batch.push({ id: a.id, text: a.text }); });
+            if (batch.length) {
+                items.push({
+                    location: 'before', widget: 'dxDropDownButton',
+                    options: {
+                        icon: 'more', hint: '批量操作（对勾选的行）', stylingMode: 'text', showArrowIcon: true, items: batch, displayExpr: 'text', keyExpr: 'id',
+                        useSelectMode: false, dropDownOptions: { width: 190 },
+                        onItemClick: function (a) {
+                            var id = a.itemData.id;
+                            if (id === '__delete') { DxGrid.batchDelete(grid); return; }
+                            var x = actions.filter(function (v) { return v.id === id; })[0];
+                            if (x) { DxGrid.runBatchAction(grid, x); }
+                        }
+                    }
+                });
             }
-        });
-        items.push(btn('revert', '重置：清除筛选、搜索、排序、分组和选中', function () { DxGrid.resetView(grid); }));
+        }
         items.push(menu('export', '导出（CSV，Excel 可直接打开）', [
             { id: 'page', text: '导出当前页' }, { id: 'selected', text: '导出选中行' }, { id: 'all', text: '导出全部（按当前筛选）' }
         ], function (id) { DxGrid.exportCsv(grid, id); }));
@@ -351,12 +638,12 @@
         }
         items.push(menu('preferences', '表格设置', [
             { id: 'layout', text: '恢复默认布局' }, { id: 'saveLayout', text: '保存布局' }, { id: 'loadLayout', text: '恢复布局' },
-            { id: 'style', text: '表格外观（Grid 配置）' }
+            { id: 'style', text: '表格外观（UI配置）' }
         ], function (id) {
             if (id === 'layout') { DxGrid.resetLayout(grid); }
             if (id === 'saveLayout') { DxGrid.saveLayout(grid); }
             if (id === 'loadLayout') { DxGrid.loadLayout(grid); }
-            if (id === 'style' && typeof openAdminTab === 'function') { openAdminTab('/gridStyle', 'Grid 配置'); }
+            if (id === 'style' && typeof openAdminTab === 'function') { openAdminTab('/uiStyle?tab=grid', 'UI配置'); }
         }));
     };
 
@@ -562,7 +849,7 @@
             var b = builder();
             var $el = $('<div></div>').appendTo(document.body);
             var pk = $el.dxPopup({
-                title: '选择过滤器模板', width: 420, height: 'auto', maxHeight: '70%', showTitle: true, showCloseButton: true,
+                title: '选择过滤器模板', width: '90%', maxWidth: 420, height: '70%', showTitle: true, showCloseButton: true,
                 hideOnOutsideClick: true, onHidden: function () { $el.remove(); },
                 contentTemplate: function (content) {
                     var $list = $('<div></div>').appendTo(content);
@@ -597,7 +884,7 @@
             var $el = $('<div></div>').appendTo(document.body);
             var tb;
             var pk = $el.dxPopup({
-                title: '保存为模板', width: 380, height: 'auto', showTitle: true, showCloseButton: true, hideOnOutsideClick: false,
+                title: '保存为模板', width: '90%', maxWidth: 380, height: '70%', showTitle: true, showCloseButton: true, hideOnOutsideClick: false,
                 onHidden: function () { $el.remove(); },
                 toolbarItems: [
                     { toolbar: 'bottom', location: 'after', widget: 'dxButton', options: { text: '保存', type: 'default', stylingMode: 'contained', onClick: doSave } },
@@ -637,13 +924,28 @@
      */
     DxGrid.autoHeight = function (target) {
         var $el = $(target && target.element ? target.element() : target);
-        var top = $el.length && $el.offset() ? $el.offset().top : 0;
+        // 使用相对视口的位置，避免页面曾经滚动后 offset.top 仍按文档坐标计算。
+        var top = $el.length && $el[0].getBoundingClientRect ? $el[0].getBoundingClientRect().top : 0;
         var bottom = 0;
         $el.parentsUntil('html').each(function () {
             var $p = $(this);
             bottom += (parseFloat($p.css('padding-bottom')) || 0) + (parseFloat($p.css('border-bottom-width')) || 0);
         });
         return Math.max(200, Math.floor($(window).height() - top - bottom));
+    };
+
+    /** 自动高度主 Grid 在业务栏、窗口尺寸或其它上方布局变化后统一调用。 */
+    DxGrid.syncAutoHeight = function (grid) {
+        if (!grid || typeof grid.updateDimensions !== 'function') { return; }
+        if (grid._autoHeightManaged) { grid.option('height', DxGrid.autoHeight(grid.element())); }
+        grid.updateDimensions();
+    };
+
+    /** 让复用 DxGrid 公共工具栏的 TreeList 也接入主页面自动高度。 */
+    DxGrid.enableAutoHeight = function (grid) {
+        if (!grid) { return; }
+        grid._autoHeightManaged = true;
+        DxGrid.syncAutoHeight(grid);
     };
 
     /**
@@ -680,7 +982,7 @@
      *   GET {url}?skip=&take=&sort=<JSON>&filter=<JSON>  →  data: {items, total}
      * 增删改和 restStore 一样。表头筛选（headerFilter）要按列去重取值，服务端没有提供，用这个 store 的表格请关掉它。
      */
-    DxGrid.remoteStore = function (url, key) {
+    DxGrid.remoteStore = function (url, key, extraParams) {
         var base = DxGrid.restStore(url, key);
         function get(path) {
             return $.ajax({ url: APP.HOST + path, method: 'GET' }).then(function (res) {
@@ -698,6 +1000,7 @@
                 if (o.take) { q.take = o.take; q.skip = o.skip || 0; }
                 if (o.sort) { q.sort = JSON.stringify(o.sort); }
                 if (o.filter) { q.filter = JSON.stringify(o.filter); }
+                $.extend(q, typeof extraParams === 'function' ? (extraParams(o) || {}) : (extraParams || {}));
                 var qs = $.param(q);
                 return get(url + (qs ? '?' + qs : '')).then(function (res) {
                     return Array.isArray(res) ? { data: res, totalCount: res.length } : { data: res.items, totalCount: res.total };

@@ -28,7 +28,7 @@ html, body {
     --sb-accent: #f0a830;
     --sb-thumb: rgba(255, 255, 255, 0.22);
     --sb-thumb-hover: rgba(255, 255, 255, 0.4);
-    width: 150px;
+    width: var(--sidebar-width, 150px);
     flex-shrink: 0;
     background: var(--sb-bg);
     color: var(--sb-text);
@@ -196,7 +196,7 @@ html, body {
 }
 
 .menu-children .menu-item {
-    padding-left: 44px;
+    padding-left: 34px;
 }
 
 .menu-item {
@@ -207,6 +207,15 @@ html, body {
     overflow: hidden;
     text-overflow: ellipsis;
     color: var(--sb-text);
+    display: flex;
+    align-items: center;
+}
+
+.menu-item .menu-item-icon {
+    width: 18px;
+    margin-right: 7px;
+    text-align: center;
+    flex-shrink: 0;
 }
 
 .menu-item:hover,
@@ -233,24 +242,50 @@ html, body {
     max-height: 0 !important;
 }
 
-/* 收缩状态下鼠标移到菜单图标时的文本提示（挂在 body 上，避开侧栏 overflow:hidden） */
-#menuTip {
+/* 收缩状态下的一级菜单悬浮子菜单（挂在 body 上，避开侧栏 overflow:hidden） */
+#collapsedMenuFlyout {
     position: fixed;
-    transform: translateY(-50%);
-    padding: 5px 10px;
+    min-width: 132px;
+    max-width: 240px;
+    padding: 6px 0;
     background: #16213c;
-    color: #fff;
+    color: #cfd6e4;
     font-size: 12px;
-    border-radius: 3px;
+    border-radius: 0 8px 8px 0;
     white-space: nowrap;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-    pointer-events: none;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
     display: none;
     z-index: 3000;
 }
 
-#menuTip.show {
+#collapsedMenuFlyout.show {
     display: block;
+}
+
+#collapsedMenuFlyout .flyout-title {
+    padding: 7px 14px;
+    color: #f0a830;
+    font-weight: bold;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+#collapsedMenuFlyout .flyout-item {
+    padding: 8px 14px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#collapsedMenuFlyout .flyout-item:hover,
+#collapsedMenuFlyout .flyout-item.active {
+    background: #2a3c63;
+    color: #fff;
+}
+
+#collapsedMenuFlyout .flyout-section {
+    padding: 7px 14px 3px;
+    color: #f0a830;
+    font-size: 11px;
 }
 
 /* ---------- 主区域 ---------- */
@@ -338,7 +373,8 @@ html, body {
     white-space: nowrap;
     border-radius: 6px 6px 0 0;
     flex-shrink: 0;
-    font-size: 13px;
+    font-size: 12px;
+    font-weight: normal;
 }
 
 .tab-item .fa {
@@ -363,8 +399,8 @@ html, body {
     margin-right: 0;
 }
 
-.tab-dot-part { background: #1f9d8b; }
-.tab-dot-pro { background: #7a5cc7; }
+.tab-dot-goods { background: #1f9d8b; }
+.tab-dot-product { background: #7a5cc7; }
 
 /* 标题可能是业务数据（数据单标题、零件号），长了会把别的标签挤出可视区：
  * 这里按像素截断（中英文混排按字数截宽度参差不齐），完整标题挂在 .tab-item 的 title 属性上
@@ -385,7 +421,7 @@ html, body {
 .tab-item.active {
     background: #fff;
     color: #0C6C9E;
-    font-weight: 600;
+    font-weight: normal;
     box-shadow: 0 -2px 0 #0C6C9E inset;
 }
 

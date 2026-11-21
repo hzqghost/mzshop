@@ -129,18 +129,22 @@ $(function () {
         cols.push({ dataField: 'status', caption: '启用', dataType: 'boolean', width: 70 });
         fields.forEach(function (f) { cols.push(extColumn(f)); });
         if (!withParent) { cols.push({ type: 'buttons', caption: '操作', width: 90, buttons: ['edit', 'delete'] }); }
-        return cols;
+        return DxGrid.prepareColumns(cols);
     }
 
     function disposeValue() {
         if (valueGrid) { valueGrid.dispose(); valueGrid = null; }
-        if (valueTree) { valueTree.dispose(); valueTree = null; }
+        if (valueTree) {
+            if (valueTree._businessToolbarEl) { valueTree._businessToolbarEl.remove(); }
+            valueTree.dispose(); valueTree = null;
+        }
         $('#avValueGrid').empty().hide();
         $('#avValueTree').empty().hide();
     }
 
     function panelHeight() {
-        return Math.max(280, $('#avValuePanel').height() - $('#avValueHeader').outerHeight(true) - 4);
+        var toolbarHeight = $('#avValuePanel > .dxgrid-business-toolbar').outerHeight(true) || 0;
+        return Math.max(280, $('#avValuePanel').height() - $('#avValueHeader').outerHeight(true) - toolbarHeight - 4);
     }
 
     function selectType(type) {
@@ -175,6 +179,7 @@ $(function () {
                 }
             }),
             keyExpr: 'id',
+            businessToolbar: true,
             height: panelHeight,
             autoHeight: false,
             editing: {
@@ -183,7 +188,7 @@ $(function () {
                     addRow: '新增属性值', editRow: '编辑', deleteRow: '删除', saveRowChanges: '保存', cancelRowChanges: '取消',
                     confirmDeleteMessage: '确定删除该属性值吗？已被供应商或目录条目使用的币种不能删除'
                 },
-                popup: { title: type.cn_name, width: 560, height: 'auto', showTitle: true, showCloseButton: true, hideOnOutsideClick: false }
+                popup: { title: type.cn_name, width: '90%', maxWidth: 560, height: '80%', showTitle: true, showCloseButton: true, hideOnOutsideClick: false }
             },
             onInitNewRow: function (e) { e.data.status = true; e.data.sort_order = 0; e.data.code = ''; },
             onRowDblClick: function (e) { if (e.rowType === 'data') { e.component.editRow(e.rowIndex); } },
@@ -197,12 +202,12 @@ $(function () {
             var nodes = flatten(rows, fields);
             var columns = baseColumns(type, fields, true);
             columns[0].lookup.dataSource = nodes;
-            valueTree = $('#avValueTree').dxTreeList({
+            valueTree = $('#avValueTree').dxTreeList($.extend({}, DxGrid.headerMenuOptions(false), {
                 dataSource: nodes,
                 keyExpr: 'id',
                 parentIdExpr: 'parent_id',
                 rootValue: null,
-                height: panelHeight(),
+                height: panelHeight,
                 showBorders: true,
                 autoExpandAll: true,
                 columnAutoWidth: true,
@@ -210,9 +215,16 @@ $(function () {
                 editing: {
                     mode: 'popup', allowAdding: true, allowUpdating: true, allowDeleting: true, useIcons: true,
                     texts: { addRow: '新增', confirmDeleteMessage: '确定删除该属性值吗？有下级时请先删除下级' },
-                    popup: { title: type.cn_name, width: 560, height: 'auto', showCloseButton: true }
+                    popup: { title: type.cn_name, width: '90%', maxWidth: 560, height: '80%', showCloseButton: true }
                 },
-                toolbar: { items: ['addRowButton', 'revertButton'] },
+                onToolbarPreparing: function (e) {
+                    var component = e.component;
+                    component._hasBusinessToolbar = true;
+                    component._gridKey = '/attrValues#tree:' + type.id;
+                    component._stateKey = 'dxGrid:' + component._gridKey;
+                    DxGrid._buildToolbar(component, e);
+                    DxGrid._placeColumnChooser(e.toolbarOptions.items, component);
+                },
                 columns: columns,
                 onInitNewRow: function (e) { e.data.status = true; e.data.sort_order = 0; },
                 onSaving: function (e) {
@@ -234,7 +246,9 @@ $(function () {
                         reloadTree();
                     });
                 }
-            }).dxTreeList('instance');
+            })).dxTreeList('instance');
+            DxGrid._initBusinessToolbar(valueTree, true);
+            valueTree.updateDimensions();
 
             function reloadTree() {
                 call('GET', '/api/v1/attrs/values?type_id=' + type.id).then(function (fresh) {
@@ -247,7 +261,7 @@ $(function () {
     }
 
     var picked = false;
-    $('#avTypeGrid').dxDataGrid({
+    $('#avTypeGrid').dxDataGrid($.extend({}, DxGrid.headerMenuOptions(false), {
         height: '100%',
         keyExpr: 'id',
         showBorders: true,
@@ -269,7 +283,7 @@ $(function () {
             e.component.option('focusedRowKey', row.key);
             selectType(row.data);
         }
-    });
+    }));
 
     call('GET', '/api/v1/attrs/types').then(function (rows) {
         $('#avTypeGrid').dxDataGrid('instance').option('dataSource', rows);

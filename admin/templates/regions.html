@@ -1,0 +1,228 @@
+{% extends "page.html" %}
+{% block title %}区域{% endblock %}
+{% block body %}
+<div class="page-pad">
+    <div id="regionGrid"></div>
+</div>
+<script>
+/* 区域勾选国家：一个国家可以出现在多个区域里。列表最多展示前 15 个名称 */
+var geoNodes = null;
+
+function loadGeoNodes() {
+    if (geoNodes) { return $.when(geoNodes); }
+    return $.ajax({ url: APP.HOST + '/api/v1/geo', method: 'GET' }).then(function (res) {
+        if (res.code !== 0) { return $.Deferred().reject(res.msg).promise(); }
+        geoNodes = res.data || [];
+        return geoNodes;
+    }, function (xhr) {
+        if (xhr.status === 401) { (window.top || window).location.href = APP.HOST + '/login'; }
+        return $.Deferred().reject((xhr.responseJSON && xhr.responseJSON.msg) || '国家地区加载失败').promise();
+    });
+}
+
+function countryLabel(node) {
+    return (node.code ? node.code + '-' : '') + node.name_zh;
+}
+
+/* 勾选全球或洲本身，不连带勾选下面的国家：只保存这一级，表示其下全部国家 */
+function mountCountryPicker($host, nodes, selectedIds, onChange) {
+    var byId = {};
+    var byParent = {};
+    nodes.forEach(function (n) {
+        byId[n.id] = n;
+        var pid = n.parent_id || 0;
+        (byParent[pid] = byParent[pid] || []).push(n);
+    });
+    Object.keys(byParent).forEach(function (pid) {
+        byParent[pid].sort(function (a, b) {
+            return (a.sort_order - b.sort_order) || String(a.code).localeCompare(String(b.code));
+        });
+    });
+    var selected = {};
+    (selectedIds || []).forEach(function (id) { selected[id] = true; });
+
+    var $box = $('<div class="geo-pick"></div>').appendTo($host);
+    if (!nodes.length) {
+        $box.text('还没有可勾选的国家地区');
+        return;
+    }
+
+    function addCheck($parent, node, itemClass) {
+        var text = countryLabel(node);
+        var hint = node.is_leaf ? text : text + '（不选下级时表示其下全部）';
+        var $item = $('<label class="geo-pick-label"></label>').addClass(itemClass || '').appendTo($parent);
+        var $input = $('<input type="checkbox">').attr('data-id', node.id).prop('checked', !!selected[node.id]).appendTo($item);
+        $('<span></span>').text(text).attr('title', hint).appendTo($item);
+        return $input;
+    }
+
+    function renderLevel(parentId, $container) {
+        (byParent[parentId] || []).forEach(function (node) {
+            var kids = byParent[node.id] || [];
+            var $node = $('<div class="geo-pick-node"></div>').appendTo($container);
+            var $row = $('<div class="geo-pick-row"></div>').appendTo($node);
+            var $toggle = $('<button type="button" class="geo-pick-toggle"></button>').appendTo($row);
+            addCheck($row, node);
+            if (!kids.length) {
+                $toggle.addClass('is-empty').attr('tabindex', '-1');
+                return;
+            }
+            var $kids = $('<div class="geo-pick-children"></div>').appendTo($node);
+            var leavesOnly = kids.every(function (k) { return k.is_leaf; });
+            if (leavesOnly) {
+                var $items = $('<div class="geo-pick-items"></div>').appendTo($kids);
+                kids.forEach(function (leaf) { addCheck($items, leaf, 'geo-pick-item'); });
+            } else {
+                renderLevel(node.id, $kids);
+            }
+            $toggle.text('▾').attr('aria-expanded', 'true');
+            $toggle.on('click', function (ev) {
+                ev.preventDefault();
+                var open = $toggle.attr('aria-expanded') === 'true';
+                $toggle.attr('aria-expanded', open ? 'false' : 'true').text(open ? '▸' : '▾');
+                $kids.toggle(!open);
+            });
+        });
+    }
+    renderLevel(0, $box);
+
+    function uncheckWhere(match) {
+        $box.find('input[type="checkbox"]').each(function () {
+            var id = Number($(this).attr('data-id'));
+            if (match(byId[id])) { this.checked = false; }
+        });
+    }
+    function isUnder(node, ancestorId) {
+        var guard = 0;
+        var cur = node;
+        while (cur && cur.parent_id && guard++ < 30) {
+            if (cur.parent_id === ancestorId) { return true; }
+            cur = byId[cur.parent_id];
+        }
+        return false;
+    }
+    $box.on('change', 'input[type="checkbox"]', function () {
+        var id = Number($(this).attr('data-id'));
+        var node = byId[id];
+        if (node && this.checked) {
+            if (!node.parent_id) {
+                uncheckWhere(function (other) { return other && other.id !== id; });
+            } else if (!node.is_leaf) {
+                uncheckWhere(function (other) { return other && other.id !== id && isUnder(other, id); });
+                uncheckWhere(function (other) { return other && other.id !== id && isUnder(node, other.id); });
+            } else {
+                uncheckWhere(function (other) { return other && !other.is_leaf && isUnder(node, other.id); });
+            }
+        }
+        var ids = [];
+        $box.find('input[type="checkbox"]:checked').each(function () { ids.push(Number($(this).attr('data-id'))); });
+        onChange(ids);
+    });
+}
+
+$(function () {
+    var grid = new DxGrid($('#regionGrid')[0], {
+        dataSource: DxGrid.restStore('/api/v1/regions', 'id'),
+        keyExpr: 'id',
+        businessToolbar: true,
+        rowReorder: function (info) {
+            return apiPost('/api/v1/regions/move', { id: info.key, target_id: info.targetKey, after: info.after });
+        },
+        editing: {
+            mode: 'popup', allowAdding: true, allowUpdating: true, allowDeleting: true, useIcons: true,
+            texts: {
+                addRow: '新增区域', editRow: '编辑', deleteRow: '删除', saveRowChanges: '保存', cancelRowChanges: '取消',
+                confirmDeleteTitle: '删除区域', confirmDeleteMessage: '确定删除该区域吗？已勾选的国家不会被删除'
+            },
+            popup: { title: '区域', width: '90%', maxWidth: 1000, height: '80%', showTitle: true },
+            form: {
+                colCount: 1, labelLocation: 'left',
+                items: [
+                    { dataField: 'name', label: { text: '区域名称' } },
+                    { dataField: 'sort_order', label: { text: '排序' } },
+                    {
+                        dataField: 'country_ids',
+                        label: { text: '国家', location: 'top' },
+                        template: function (data, itemElement) {
+                            // 弹窗表单拿不到隐藏列的初值，从正在编辑的行读已选国家
+                            var editing = $('#regionGrid').dxGrid('instance').getVisibleRows().filter(function (r) {
+                                return r.isEditing && r.data;
+                            })[0];
+                            var current = (editing && editing.data.country_ids) || (data.editorOptions && data.editorOptions.value) || [];
+                            var $host = $('<div></div>').text('正在加载国家地区…').appendTo(itemElement);
+                            loadGeoNodes().then(function (nodes) {
+                                $host.empty();
+                                // 不把勾选写回表单。写回会让这一项重新渲染，编辑时刚改的国家又变回打开时的旧值
+                                mountCountryPicker($host, nodes, current, function (ids) {
+                                    if (editing && editing.data) { editing.data.country_ids = ids.slice(); }
+                                });
+                            }, function (msg) {
+                                $host.text(msg || '国家地区加载失败');
+                            });
+                        }
+                    }
+                ]
+            }
+        },
+        onInitNewRow: function (e) { e.data.sort_order = 0; e.data.country_ids = []; },
+        onSaving: function (e) {
+            // 勾选框不是表单编辑器。只改国家时表格认为没有改动，这里补上 country_ids
+            var $box = $('.dx-popup-content .geo-pick');
+            if (!$box.length) { return; }
+            var ids = [];
+            $box.find('input[type="checkbox"]:checked').each(function () {
+                var n = Number($(this).attr('data-id'));
+                if (n) { ids.push(n); }
+            });
+            e.changes = e.changes || [];
+            var change = e.changes.filter(function (ch) { return ch.type === 'insert' || ch.type === 'update'; })[0];
+            if (!change) {
+                var row = e.component.getVisibleRows().filter(function (r) { return r.isEditing; })[0];
+                if (!row) { return; }
+                if (row.isNewRow) {
+                    e.changes.push({ type: 'insert', data: $.extend({}, row.data, { country_ids: ids }) });
+                } else {
+                    e.changes.push({ type: 'update', key: row.key, data: { country_ids: ids } });
+                }
+                return;
+            }
+            change.data = change.data || {};
+            change.data.country_ids = ids;
+        },
+        onRowDblClick: function (e) { if (e.rowType === 'data') { e.component.editRow(e.rowIndex); } },
+        onRowInserted: function () { DevExpress.ui.notify('区域已新增', 'success', 1800); },
+        onRowUpdated: function () { DevExpress.ui.notify('区域已保存', 'success', 1800); },
+        onRowRemoved: function () { DevExpress.ui.notify('区域已删除', 'success', 1800); },
+        columns: [
+            {
+                dataField: 'name', caption: '区域名称', width: 180, minWidth: 180,
+                validationRules: [{ type: 'required', message: '请填写区域名称' }, { type: 'stringLength', max: 100, message: '最长 100 个字符' }]
+            },
+            {
+                dataField: 'countries', caption: '国家', minWidth: 280, allowEditing: false, formItem: { visible: false },
+                calculateCellValue: function (row) {
+                    return (row.countries || []).map(function (c) { return c.name_zh; }).join('、');
+                },
+                cellTemplate: function (container, options) {
+                    var list = (options.data && options.data.countries) || [];
+                    var names = list.slice(0, 15).map(function (c) { return c.name_zh; });
+                    var $text = $('<span></span>').text(names.join('、'));
+                    if (list.length > 15) {
+                        $text.append($('<span class="geo-pick-more"></span>').text('…共' + list.length + '个'));
+                    }
+                    var title = list.map(function (c) {
+                        return c.code + '-' + c.name_zh + (c.is_leaf === false ? '（全部）' : '');
+                    }).join('、');
+                    $text.attr('title', list.length > 15 ? ('共' + list.length + '个：' + title) : title);
+                    $(container).append($text);
+                }
+            },
+            { dataField: 'country_ids', visible: false, showInColumnChooser: false, formItem: { visible: true } },
+            { dataField: 'sort_order', caption: '排序', dataType: 'number', width: 80 },
+            { dataField: 'id', caption: 'ID', width: 70, allowEditing: false, formItem: { visible: false } },
+            { dataField: 'created_at', caption: '创建时间', width: 160, allowEditing: false, formItem: { visible: false } }
+        ]
+    });
+});
+</script>
+{% endblock %}

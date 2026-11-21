@@ -1,0 +1,210 @@
+{% extends "page.html" %}
+{% block title %}运费模板{% endblock %}
+{% block body %}
+<div class="page-pad"><div id="shippingCalc" style="margin-bottom:10px"></div><div id="shippingGrid"></div></div>
+<script>
+var regions = [], editingRules = [], ruleGrid = null, editingTemplate = null, templateForm = null;
+
+function moneyCol(field, caption) {
+    return { dataField: field, caption: caption, dataType: 'number', format: { type: 'fixedPoint', precision: 2 }, minWidth: 105 };
+}
+function calcText(v) { return v === 'chargeable' ? '按计费重量（取大）' : (v === 'weight' ? '按实际重量' : '固定运费'); }
+function ruleOptions(calcType) {
+    var weight = calcType !== 'fixed';
+    return {
+        dataSource: editingRules, keyExpr: '_kid', height: 300, dxFeatures: false,
+        paging: { enabled: false }, filterRow: { visible: false }, headerFilter: { visible: false },
+        searchPanel: { visible: false }, sorting: { mode: 'none' }, noDataText: '请至少增加一条规则',
+        editing: { mode: 'row', allowAdding: true, allowUpdating: true, allowDeleting: true, useIcons: true,
+            texts: { addRow: '新增规则', confirmDeleteMessage: '确定删除该规则吗？' } },
+        onInitNewRow: function (e) { e.data._kid = 'n' + Date.now(); e.data.priority = 100; },
+        columns: [
+            { dataField: 'region_id', caption: '区域', minWidth: 140,
+              lookup: { dataSource: [{id: 0, name: '默认规则'}].concat(regions), valueExpr: 'id', displayExpr: 'name' },
+              validationRules: [{ type: 'required', message: '请选择区域；默认规则请选择“默认规则”' }] },
+            { dataField: 'priority', caption: '匹配顺序（小优先）', dataType: 'number', minWidth: 140 },
+            $.extend(moneyCol('fixed_fee', '固定运费'), { visible: !weight,
+                validationRules: weight ? [] : [{ type: 'required', message: '请填写固定运费' }] }),
+            { dataField: 'first_weight_g', caption: '首重(g)', dataType: 'number', visible: weight, minWidth: 95,
+              validationRules: weight ? [{ type: 'required', message: '请填写首重' }] : [] },
+            $.extend(moneyCol('first_fee', '首重费用'), { visible: weight,
+                validationRules: weight ? [{ type: 'required', message: '请填写首重费用' }] : [] }),
+            { dataField: 'additional_weight_g', caption: '续重单位(g)', dataType: 'number', visible: weight, minWidth: 110,
+              validationRules: weight ? [{ type: 'required', message: '请填写续重单位' }] : [] },
+            $.extend(moneyCol('additional_fee', '续重费用'), { visible: weight,
+                validationRules: weight ? [{ type: 'required', message: '请填写续重费用' }] : [] }),
+            { dataField: 'arrival_days_min', caption: '最快(天)', dataType: 'number', width: 90 },
+            { dataField: 'arrival_days_max', caption: '最慢(天)', dataType: 'number', width: 90 }
+        ]
+    };
+}
+
+function syncRuleColumns(calcType) {
+    if (!ruleGrid) { return; }
+    var weight = calcType !== 'fixed';
+    ruleGrid.beginUpdate();
+    ruleGrid.columnOption('fixed_fee', 'visible', !weight);
+    ruleGrid.columnOption('fixed_fee', 'validationRules', weight ? [] : [{ type: 'required', message: '请填写固定运费' }]);
+    ['first_weight_g', 'first_fee', 'additional_weight_g', 'additional_fee'].forEach(function (field) {
+        ruleGrid.columnOption(field, 'visible', weight);
+        ruleGrid.columnOption(field, 'validationRules', weight ? [{ type: 'required', message: '请填写' + ruleGrid.columnOption(field, 'caption') }] : []);
+    });
+    ruleGrid.endUpdate();
+    ruleGrid.updateDimensions();
+}
+
+$(function () {
+    $.ajax({ url: APP.HOST + '/api/v1/regions' }).then(function (res) {
+        regions = (res && res.data) || [];
+        buildGrid();
+    }, apiError);
+});
+
+function openCalculator() {
+    $.ajax({ url: APP.HOST + '/api/v1/shipping-templates' }).then(function (res) {
+        var templates = (res.data || []).filter(function (x) { return x.status; });
+        var data = { template_id: null, region_id: null, subtotal: 0, weight_g: null };
+        var $host = $('<div></div>').appendTo(document.body), form;
+        var popup = $host.dxPopup({
+            title: '运费试算', width: '90%', maxWidth: 560, height: 'auto', showTitle: true, showCloseButton: true,
+            contentTemplate: function (el) {
+                form = $('<div></div>').appendTo(el).dxForm({ formData: data, labelLocation: 'left', items: [
+                    { dataField: 'template_id', label: {text:'运费模板'}, editorType: 'dxSelectBox', editorOptions: {
+                        dataSource: templates, valueExpr: 'id', displayExpr: 'name' }, validationRules: [{type:'required'}] },
+                    { dataField: 'region_id', label: {text:'目的区域'}, editorType: 'dxSelectBox', editorOptions: {
+                        dataSource: regions, valueExpr: 'id', displayExpr: 'name' }, validationRules: [{type:'required'}] },
+                    { dataField: 'subtotal', label: {text:'分组商品金额'}, editorType: 'dxNumberBox', editorOptions: {min:0} },
+                    { dataField: 'weight_g', label: {text:'商品实际重量(g)'}, editorType: 'dxNumberBox', editorOptions: {min:1},
+                      helpText: '填写实际重量；固定运费模板可以留空' },
+                    { dataField: 'package_length_cm', label: {text:'包装长度(cm)'}, editorType: 'dxNumberBox', editorOptions: {min:0.01, format:'#0.00'} },
+                    { dataField: 'package_width_cm', label: {text:'包装宽度(cm)'}, editorType: 'dxNumberBox', editorOptions: {min:0.01, format:'#0.00'} },
+                    { dataField: 'package_height_cm', label: {text:'包装高度(cm)'}, editorType: 'dxNumberBox', editorOptions: {min:0.01, format:'#0.00'},
+                      helpText: '按计费重量模板需要完整长宽高' },
+                    { name: 'result', label: {text:'计算结果'}, template: function (_, box) { $('<div class="muted">尚未计算</div>').appendTo(box); } }
+                ]}).dxForm('instance');
+            },
+            toolbarItems: [{ toolbar:'bottom', location:'after', widget:'dxButton', options: { text:'计算', type:'default', onClick:function () {
+                if (!form.validate().isValid) { return; }
+                var v = form.option('formData');
+                $.ajax({ url: APP.HOST + '/api/v1/shipping-templates/' + v.template_id + '/calculate', method:'POST',
+                    contentType:'application/json', data:JSON.stringify(v) }).then(function (r) {
+                    var x = r.data || {};
+                    form.itemOption('result', 'template', function (_, box) {
+                        var detail = x.chargeable_weight_g ? '；实际重量：' + x.actual_weight_g + 'g；体积重量：' + x.volume_weight_g + 'g；计费重量：' + x.chargeable_weight_g + 'g' : '';
+                        $('<div></div>').text('运费：' + x.fee + ' ' + x.currency + '；原始运费：' + x.original_fee + detail +
+                            (x.free_shipping ? '；已满足免邮' : '')).appendTo(box);
+                    });
+                }, apiError);
+            }}}, { toolbar:'bottom', location:'after', widget:'dxButton', options:{text:'关闭',onClick:function(){popup.hide();}} }],
+            onHidden: function () { $host.remove(); }
+        }).dxPopup('instance');
+        popup.show();
+    }, apiError);
+}
+
+function buildGrid() {
+    $('#shippingCalc').dxButton({ text: '运费试算', icon: 'money', type: 'default', stylingMode: 'outlined', onClick: openCalculator });
+    new DxGrid($('#shippingGrid')[0], {
+        dataSource: DxGrid.restStore('/api/v1/shipping-templates', 'id'), keyExpr: 'id', businessToolbar: true,
+        editing: {
+            mode: 'popup', allowAdding: true, allowUpdating: true, allowDeleting: true, useIcons: true,
+            texts: { addRow: '新增运费模板', editRow: '编辑', deleteRow: '删除', saveRowChanges: '保存', cancelRowChanges: '取消',
+                confirmDeleteTitle: '删除运费模板', confirmDeleteMessage: '确定删除该模板吗？' },
+            popup: { title: '运费模板', width: '95%', maxWidth: 1180, height: '88%', showTitle: true },
+            form: { colCount: 3, labelLocation: 'left', onFieldDataChanged: function (e) {
+                if (e.dataField === 'calc_type') {
+                    if (editingTemplate) { editingTemplate.calc_type = e.value; }
+                    syncRuleColumns(e.value);
+                }
+            }, items: [
+                { dataField: 'name', label: { text: '模板名称' } },
+                { dataField: 'currency', label: { text: '币种' }, editorType: 'dxSelectBox', editorOptions: {
+                    dataSource: new DevExpress.data.CustomStore({ key: 'code', loadMode: 'raw', load: function () {
+                        return $.ajax({ url: APP.HOST + '/api/v1/attrs/options?code=currency' }).then(function (r) { return r.data || []; });
+                    }}), valueExpr: 'code', displayExpr: 'label', searchEnabled: true } },
+                { dataField: 'calc_type', label: { text: '计费方式' }, editorType: 'dxSelectBox', editorOptions: {
+                    dataSource: [{id:'fixed',name:'固定运费'},{id:'weight',name:'按实际重量'},{id:'chargeable',name:'按计费重量（实际/体积取大）'}], valueExpr: 'id', displayExpr: 'name',
+                    onValueChanged: function (e) {
+                        if (templateForm && templateForm.option('formData').calc_type !== e.value) { templateForm.updateData('calc_type', e.value); }
+                        if (editingTemplate) { editingTemplate.calc_type = e.value; }
+                        syncRuleColumns(e.value);
+                    } } },
+                { dataField: 'volume_divisor', label: { text: '体积重系数' }, editorType: 'dxNumberBox',
+                  editorOptions: { min: 1000, max: 20000 }, helpText: '按计费重量使用，国际快递通常为 5000 或 6000' },
+                { dataField: 'free_threshold', label: { text: '满额免邮' }, editorType: 'dxNumberBox', editorOptions: { min: 0 } },
+                { dataField: 'min_fee', label: { text: '最低运费' }, editorType: 'dxNumberBox', editorOptions: { min: 0 } },
+                { dataField: 'max_fee', label: { text: '最高运费' }, editorType: 'dxNumberBox', editorOptions: { min: 0 } },
+                { dataField: 'no_match_action', label: { text: '未匹配区域' }, editorType: 'dxSelectBox', editorOptions: {
+                    dataSource: [{id:'reject',name:'禁止配送'},{id:'default',name:'使用默认规则'}], valueExpr: 'id', displayExpr: 'name' } },
+                { dataField: 'status', label: { text: '启用' }, editorType: 'dxSwitch' },
+                { dataField: 'remark', colSpan: 3, label: { text: '备注' } },
+                { colSpan: 3, label: { text: '区域规则', location: 'top' }, template: function (d, el) {
+                    templateForm = d.component;
+                    var row = editingTemplate || d.component.option('formData') || {};
+                    editingRules = (row.rules || []).map(function (r, i) { return $.extend({}, r, {_kid: r.id || ('n'+i)}); });
+                    ruleGrid = $('<div></div>').appendTo(el).dxGrid(ruleOptions(row.calc_type || 'fixed')).dxGrid('instance');
+                }}
+            ]}
+        },
+        onInitNewRow: function (e) {
+            e.data.currency = 'USD'; e.data.calc_type = 'fixed'; e.data.volume_divisor = 5000;
+            e.data.no_match_action = 'reject'; e.data.status = true; e.data.rules = [];
+            editingTemplate = e.data;
+        },
+        onEditingStart: function (e) { editingTemplate = e.data; },
+        onSaving: function (e) {
+            var change = (e.changes || []).filter(function (x) { return x.type === 'insert' || x.type === 'update'; })[0];
+            if (!change) { return; }
+            if (ruleGrid && ruleGrid.hasEditData()) { ruleGrid.saveEditData(); }
+            change.data = change.data || {};
+            change.data.rules = editingRules.map(function (r) { var x = $.extend({}, r); delete x._kid; return x; });
+        },
+        onRowInserted: function () { DevExpress.ui.notify('运费模板已新增', 'success', 1800); },
+        onRowUpdated: function () { DevExpress.ui.notify('运费模板已保存', 'success', 1800); },
+        onRowRemoved: function () { DevExpress.ui.notify('运费模板已删除', 'success', 1800); },
+        masterDetail: { enabled: true, template: function (el, info) {
+            var d = info.data || {}, rules = d.rules || [];
+            var $detail = $('<div class="shipping-detail"></div>').appendTo(el);
+            function value(v) { return v == null || v === '' ? '' : v; }
+            var typeText = calcText(d.calc_type);
+            $('<div class="sku-title"></div>').text('模板概要').appendTo($detail);
+            var $summary = $('<table class="md-table"></table>').appendTo($detail);
+            $('<tr></tr>').append(['计费方式','币种','体积重系数','满额免邮','最低运费','最高运费','未匹配区域'].map(function(h){return $('<td class="md-k"></td>').text(h);})).appendTo($summary);
+            $('<tr></tr>').append([typeText,d.currency || '',d.calc_type === 'chargeable' ? d.volume_divisor : '',value(d.free_threshold),value(d.min_fee),value(d.max_fee),d.no_match_action === 'default' ? '使用默认规则' : '禁止配送'].map(function(v){return $('<td></td>').text(String(v));})).appendTo($summary);
+            $('<div class="sku-title"></div>').text('区域规则').appendTo($detail);
+            if (!rules.length) { $('<div class="muted"></div>').text('还没有区域规则').appendTo($detail); return; }
+            var $rules = $('<table class="md-table"></table>').appendTo($detail);
+            var headers = d.calc_type === 'fixed' ? ['区域','匹配顺序（越小越优先）','固定运费','最快(天)','最慢(天)'] : ['区域','匹配顺序（越小越优先）','首重(g)','首重费用','续重单位(g)','续重费用','最快(天)','最慢(天)'];
+            $('<tr></tr>').append(headers.map(function(h){return $('<td class="md-k"></td>').text(h);})).appendTo($rules);
+            rules.forEach(function(r){
+                var row = d.calc_type === 'fixed' ? [r.region_name,r.priority,value(r.fixed_fee),value(r.arrival_days_min),value(r.arrival_days_max)] : [r.region_name,r.priority,r.first_weight_g,value(r.first_fee),r.additional_weight_g,value(r.additional_fee),value(r.arrival_days_min),value(r.arrival_days_max)];
+                $('<tr></tr>').append(row.map(function(v){return $('<td></td>').text(String(v));})).appendTo($rules);
+            });
+        } },
+        columns: [
+            { dataField: 'name', caption: '模板名称', minWidth: 180, validationRules: [{type:'required',message:'请填写模板名称'}] },
+            { dataField: 'calc_type', caption: '计费方式', width: 110,
+              lookup: { dataSource: [{id:'fixed',name:'固定运费'},{id:'weight',name:'按实际重量'},{id:'chargeable',name:'按计费重量（取大）'}], valueExpr:'id', displayExpr:'name' } },
+            { dataField: 'currency', caption: '币种', width: 80 },
+            moneyCol('free_threshold', '满额免邮'), moneyCol('min_fee', '最低运费'), moneyCol('max_fee', '最高运费'),
+            { dataField: 'status', caption: '启用', dataType: 'boolean', width: 75 },
+            { dataField: 'remark', caption: '备注', minWidth: 180 },
+            { dataField: 'id', caption: 'ID', width: 70, allowEditing: false, formItem: {visible:false} },
+            { dataField: 'volume_divisor', visible: false, showInColumnChooser: false },
+            { dataField: 'no_match_action', visible: false, showInColumnChooser: false },
+            { dataField: 'rules', visible: false, showInColumnChooser: false, formItem: {visible:false} }
+        ]
+    });
+}
+</script>
+<style>
+.shipping-detail { margin: 4px 10px 10px; padding: 10px 12px 12px; background: #fbfcfe; border: 1px solid #dce3eb; border-radius: 3px; overflow-x: auto; }
+.shipping-detail .sku-title { margin: 4px 0 7px; padding-left: 8px; border-left: 3px solid #2d8ac7; color: #263746; font-size: 13px; font-weight: 600; }
+.shipping-detail .sku-title:not(:first-child) { margin-top: 13px; }
+.shipping-detail .md-table { width: auto; min-width: 760px; border-collapse: collapse; background: #fff; box-shadow: 0 0 0 1px #d7dee7 inset; }
+.shipping-detail .md-table td { min-width: 80px; padding: 6px 10px; border: 1px solid #d7dee7; color: #344454; font-size: 12px; text-align: left; white-space: nowrap; }
+.shipping-detail .md-table .md-k { background: #eef3f8; color: #42566a; font-weight: 600; }
+.shipping-detail .md-table tr:nth-child(even) td:not(.md-k) { background: #fcfdff; }
+.shipping-detail .muted { padding: 8px 10px; border: 1px dashed #cfd8e3; background: #fff; color: #7c8996; font-size: 12px; }
+</style>
+{% endblock %}

@@ -14,7 +14,16 @@
 - 编辑模式：菜单 行/弹窗/单元格/表单/批量，当前模式打勾；打勾靠**重新赋值 slice 后的 items 数组**（见 §6）。
 - 表格设置：菜单 恢复默认布局 / 保存布局 / 恢复布局 / 表格外观（Grid 配置）。
 - 搜索面板默认**不显示**（`searchPanel: { visible: false }`），用筛选行/表头筛选/过滤面板；页面确有需要才自己传 `visible: true`。
-- 页面自己的 `onToolbarPreparing` 在内置按钮之后执行，可继续增删（新增按钮放 `location: 'before'`）。
+- 页面自己的 `onToolbarPreparing` 在内置按钮之后执行，可继续增删（新增按钮放 `location: 'before'`）。列选择器在页面回调之后再被挪到最右。
+
+## 1.1 列契约（创建时由 `DxGrid.prepareColumns` 写入，页面不要再各自隐藏）
+
+- **默认隐藏、列选择器可勾出**：主键 `id`；创建时间 `created_at` / `create_time`；更新时间 `updated_at` / `update_time`；创建人 `created_by` / `creator`；最后操作人 `updated_by` / `last_operator`。标题正好是「ID / 创建时间 / 更新时间 / 创建人 / 最后操作人」的列同样处理。外键和「商品ID」不隐藏。页面已经写了 `visible` 的，不覆盖。
+- 隐藏只在**创建列定义时**做。不要在 `customizeColumns` 里把 `visible` 设回 false，否则列选择器和已保存布局会被盖掉。
+- 旧的本地布局第一次打开时把上述列收成隐藏（标记 `dxGrid:<gridKey>:auditHide`），之后用户在列选择器里的选择保留。
+- **操作列默认固定在右侧**（`type:'buttons'`、`command:'edit'` 或标题「操作」）。「Grid 配置 → 冻结勾选列和操作列」默认开着，开着时 `customizeColumns` 会把勾选列钉左、操作列钉右。
+- **例外**：`masterDetail` 默认不能有任何 fixed 列（展开图标不渲染），操作列不固定，列头右键没有「固定 / 不固定」。页面传 `keepColumnFixing: true` 时保留固定列，DxGrid 在行渲染后补回展开箭头（产品目录用这个：多选列、图片列钉左，操作列钉右）。`dxFeatures: false` 的子表同样不钉操作列。
+- **列头右键**默认就是：升序排序、降序排序、清除排序、通过该列分组、取消所有分组、固定 → 向左 / 向右、不固定。服务端分页只关掉分组面板，右键分组项仍在（只分组当前已加载的数据）。裸 `dxDataGrid` / `dxTreeList` 用 `DxGrid.headerMenuOptions()`，列定义用 `DxGrid.prepareColumns()`。
 
 ## 2. 批量菜单与「查看已选」
 
@@ -48,7 +57,7 @@
 - `dxDropDownButton` 的弹层 DOM 跨次打开**缓存**，菜单项模板只在重新赋值**新数组**时重渲染（`dd.option('items', items.slice())`）——菜单里要打勾/变文案都用这个套路。
 - 自动化验证时合成 `dispatchEvent(new MouseEvent('dxclick'))` 触发不了 DevExtreme 处理器，要用 jQuery `$(el).trigger('dxclick')`。
 - 静态 JS/CSS 无版本号，改完 dxGrid.js 浏览器可能用缓存：验证前 `fetch('/static/js/lib/dxGrid.js', {cache:'reload'})` + 刷新（或 Ctrl+F5）。
-- `masterDetail` 开启时，`columnFixing.enabled: true` 或表格里有任何 `fixed` 列都会导致展开图标不渲染（展开单元格只剩 `&nbsp;`，`expandRow` API 可用但 UI 无入口），且修复**必须在创建时**做（`_init` 里再改不生效）。DxGrid 已在 ctor 处理：masterDetail 打开时强制 `columnFixing: {enabled:false}`，并用不固定勾选列/操作列的 `customizeColumns` 包装替换默认的（页面自己的 `customizeColumns` 仍执行）。
+- `masterDetail` 开启且未传 `keepColumnFixing: true` 时，`columnFixing.enabled: true` 或表格里有任何 `fixed` 列都会导致展开图标不渲染（展开单元格只剩 `&nbsp;`）。DxGrid 在 ctor 处理：强制 `columnFixing: {enabled:false}`，操作列不钉右，`customizeColumns` 里清掉全部 `fixed`。传了 `keepColumnFixing` 的表格（产品目录）保留固定列，并在 `onRowPrepared` 里把展开箭头补回。
 
 ## 7. 前端组件约定（本项目）
 

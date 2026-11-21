@@ -5,16 +5,23 @@ from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import case, delete, func, select, update
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..catalog import applicable_attributes, is_leaf
+from ..attr_dict import normalize_currency
+from ..catalog import ancestor_ids, applicable_attributes, is_leaf
 from ..config import BASE_DIR
 from ..db import get_db
 from ..deps import require_user
 from .shop_i18n import inline_languages, load_inline, purge_translations, save_inline
 from ..listquery import build_filter, build_sort, clamp_page, parse_json
-from ..models import Brand, ShopAttribute, ShopCategory, ShopGoods, ShopGoodsImage, ShopGoodsSku, ShopTranslation
+from ..models import (
+    Brand, BundleComponent, BundleRevision, GeoRegion, GoodsNoSequence, Platform, ShippingPackageGroup, ShippingTemplate, ShopAttribute, ShopCategory, ShopGoods, ShopGoodsImage, ShopGoodsRegion,
+    ShopOrderLine,
+    ShopGoodsSku, ShopGoodsSkuRegion, ShopGoodsStore, ShopTranslation, ShopifyProductMap, ShopifySyncTask, ShopifyVariantMap,
+    StockBalance, StockLedger, Store, StoreCategory, Supplier, SupplierCatalogItem,
+)
 
 router = APIRouter(prefix="/api/v1/shop", dependencies=[Depends(require_user)])
 
@@ -122,7 +129,7 @@ def _category_paths(db: Session) -> tuple[list[ShopCategory], dict[int, str]]:
 
 
 def _category_dict(c: ShopCategory, full_name: str) -> dict:
-    return {"id": c.id, "parent_id": c.parent_id, "name": c.name, "full_name": full_name, "sort_order": c.sort_order,
+    return {"id": c.id, "parent_id": c.parent_id, "code": c.code or "", "name": c.name, "full_name": full_name, "sort_order": c.sort_order,
             "status": bool(c.status), "created_at": _fmt(c.created_at)}
 
 
@@ -141,6 +148,8 @@ def _descendants(db: Session, cid: int) -> set[int]:
 
 
 def _apply_category(db: Session, c: ShopCategory, values: dict, creating: bool) -> None:
+    if "code" in values or creating:
+        c.code = _text(values, "code", "品类编码", 50) or None
     if "name" in values or creating:
         c.name = _text(values, "name", "分类名称", 100, required=True)
     if "parent_id" in values or creating:
@@ -204,6 +213,10 @@ def delete_category(cid: int, db: Session = Depends(get_db)):
         else:
             purge_translations(db, "attribute", [a.id])
             db.delete(a)
+    from ..models import ShopifyAttributeMap, ShopifyCategoryMap
+    db.execute(delete(StoreCategory).where(StoreCategory.category_id == cid))
+    db.execute(delete(ShopifyCategoryMap).where(ShopifyCategoryMap.category_id == cid))
+    db.execute(delete(ShopifyAttributeMap).where(ShopifyAttributeMap.category_id == cid))
     purge_translations(db, "category", [cid])
     db.delete(c)
     db.commit()
@@ -344,6 +357,8 @@ def move_attribute(body: dict, db: Session = Depends(get_db)):
 @router.delete("/attributes/{aid}")
 def delete_attribute(aid: int, db: Session = Depends(get_db)):
     a = db.get(ShopAttribute, aid) or fail("属性不存在", 404)
+    from ..models import ShopifyAttributeMap
+    db.execute(delete(ShopifyAttributeMap).where(ShopifyAttributeMap.local_attribute_id == aid))
     purge_translations(db, "attribute", [a.id])
     db.delete(a)  # 已录入商品的属性值留在商品 attr_values 里，不清理
     db.commit()
@@ -365,7 +380,8 @@ def _goods_dict(g: ShopGoods, sku_count: int = 0, stock: int = 0) -> dict:
         "source_url": g.source_url, "main_image_url": g.main_image_url,
         "cost_price": float(g.cost_price), "sale_price": float(g.sale_price), "shipping_fee": float(g.shipping_fee),
         "profit": float(g.sale_price - g.cost_price - g.shipping_fee), "margin_pct": _margin(g),
-        "weight_g": g.weight_g, "status": bool(g.status), "sku_count": sku_count, "stock": stock,
+        "weight_g": g.weight_g, "shipping_package_group_id": g.shipping_package_group_id,
+        "status": bool(g.status), "sku_count": sku_count, "stock": stock,
         "created_at": _fmt(g.created_at), "updated_at": _fmt(g.updated_at),
     }
 
@@ -417,76 +433,208 @@ def _check_attr_values(db: Session, category_id: int, raw) -> dict:
     return out
 
 
-def _check_images(raw) -> list[str]:
+def _check_images(db: Session, goods_id: int, raw) -> list[dict]:
     if raw is None:
         return []
     if not isinstance(raw, list) or len(raw) > MAX_IMAGES:
         fail(f"图片最多 {MAX_IMAGES} 张")
-    urls = []
-    for u in raw:
-        u = str(u).strip()
+    images = []
+    seen = set()
+    for item in raw:
+        if isinstance(item, dict):
+            u = str(item.get("url") or "").strip()
+            try:
+                sku_id = int(item.get("sku_id")) if item.get("sku_id") not in (None, "", 0, "0") else None
+            except (TypeError, ValueError):
+                fail("图片关联的 SKU 不合法")
+        else:
+            u, sku_id = str(item).strip(), None
         if not u:
             continue
         if len(u) > 500 or not (u.startswith("/static/uploads/") or u.lower().startswith(("http://", "https://"))):
             fail("图片地址不合法")
-        urls.append(u)
-    return list(dict.fromkeys(urls))
+        if sku_id is not None:
+            sku = db.get(ShopGoodsSku, sku_id)
+            if sku is None or sku.goods_id != goods_id:
+                fail("图片只能关联当前商品的 SKU")
+        key = (u, sku_id)
+        if key not in seen:
+            images.append({"url": u, "sku_id": sku_id})
+            seen.add(key)
+    return images
 
 
-def _apply_goods(db: Session, g: ShopGoods, values: dict, creating: bool) -> list[str] | None:
+def _apply_goods(db: Session, g: ShopGoods, values: dict, creating: bool) -> list[dict] | None:
     if "goods_no" in values or creating:
         g.goods_no = _text(values, "goods_no", "商品编码", 64, required=True)
     if "name" in values or creating:
         g.name = _text(values, "name", "商品名称", 200, required=True)
     if "category_id" in values or creating:
         cid = _int(values, "category_id", "分类")
-        if cid and db.get(ShopCategory, cid) is None:
+        if not cid:
+            fail("请选择分类")
+        if db.get(ShopCategory, cid) is None:
             fail("分类不存在")
         # 商品只能挂在末级分类；只在新建或换分类时校验，分类后来长出子级的老商品不影响它保存其它字段
-        if cid and (creating or cid != g.category_id) and not is_leaf(db, cid):
+        if (creating or cid != g.category_id) and not is_leaf(db, cid):
             fail("商品只能选择末级分类，请选择该分类下的子分类")
         g.category_id = cid
     # 品牌：页面传 brand_id（品牌管理里的品牌），同时把名称冗余到旧列 brand，列表 / 导出口径不变；
-    # 没传 brand_id 时仍接受旧字符串 brand（Excel / 采集等外部入口）
-    if "brand_id" in values:
+    # 没传 brand_id 时仍接受旧字符串 brand（Excel 等外部入口）
+    if "brand_id" in values or creating:
         bid = _int(values, "brand_id", "品牌")
-        b = db.get(Brand, bid) if bid else None
-        if bid and b is None:
+        if not bid:
+            fail("请选择品牌")
+        b = db.get(Brand, bid)
+        if b is None:
             fail("品牌不存在")
         g.brand_id = bid
-        g.brand = b.name if b else ""
-    elif "brand" in values or creating:
+        g.brand = b.name
+    elif "brand" in values:
         g.brand = _text(values, "brand", "品牌", 100)
-    if "supplier" in values or creating:
+    if "supplier_id" in values or creating:
+        sid = _int(values, "supplier_id", "供应商")
+        if not sid:
+            fail("请选择供应商")
+        s = db.get(Supplier, sid)
+        if s is None:
+            fail("供应商不存在")
+        g.supplier_id = sid
+        g.supplier = s.name
+    elif "supplier" in values:
         g.supplier = _text(values, "supplier", "供应商", 100)
     if "source_url" in values or creating:
         g.source_url = _text(values, "source_url", "货源链接", 500)
     if g.source_url and not g.source_url.lower().startswith(("http://", "https://")):
         fail("货源链接需以 http:// 或 https:// 开头")
-    for f, label in (("cost_price", "拿货价"), ("sale_price", "销售价"), ("shipping_fee", "运费")):
-        if f in values or creating:
-            setattr(g, f, _money(values, f, label))
+    if "cost_price" in values or creating:
+        g.cost_price = _money(values, "cost_price", "拿货价")
+    # 销售价和运费改按区域保存。没带区域价格时仍接受商品上的旧字段（列表、外部入口）。
+    if "region_prices" not in values:
+        for f, label in (("sale_price", "销售价"), ("shipping_fee", "运费")):
+            if f in values or creating:
+                setattr(g, f, _money(values, f, label))
     if "weight_g" in values or creating:
         raw = values.get("weight_g")
         g.weight_g = None if raw in (None, "") else _int(values, "weight_g", "重量")
+    if "shipping_package_group_id" in values or creating:
+        g.shipping_package_group_id = _int(values, "shipping_package_group_id", "默认包装组")
+        if g.shipping_package_group_id and db.get(ShippingPackageGroup, g.shipping_package_group_id) is None:
+            fail("默认包装组不存在")
     if "description" in values:
         g.description = str(values.get("description") or "")[:20000]
-    if "status" in values:
-        g.status = 1 if values["status"] else 0
-    elif creating:
+    # 上架状态要等店铺记录写完再定：没有店铺记录时上架无效
+    if creating and "status" not in values:
         g.status = 0
     if "attr_values" in values or "category_id" in values or creating:
         g.attr_values = _check_attr_values(db, g.category_id, values.get("attr_values", g.attr_values))
     if "images" in values:
-        images = _check_images(values["images"])
-        g.main_image_url = images[0] if images else ""
+        images = _check_images(db, g.id or 0, values["images"])
+        g.main_image_url = next((x["url"] for x in images if x["sku_id"] is None), "")
         return images
     return None
 
 
-def _replace_images(db: Session, goods_id: int, urls: list[str]) -> None:
+def _store_link_dict(link: ShopGoodsStore, store: Store, platform: Platform | None) -> dict:
+    return {
+        "id": link.id, "store_id": store.id, "platform_id": store.platform_id,
+        "platform_name": platform.name if platform else "",
+        "store_name": store.name, "store_code": store.code,
+        "allowed": bool(link.allowed),
+        "product_url": link.product_url or "",
+    }
+
+
+def _goods_store_map(db: Session, goods_ids: list[int]) -> dict[int, list[dict]]:
+    out: dict[int, list[dict]] = {i: [] for i in goods_ids}
+    if not goods_ids:
+        return out
+    rows = db.execute(
+        select(ShopGoodsStore, Store, Platform)
+        .join(Store, Store.id == ShopGoodsStore.store_id)
+        .outerjoin(Platform, Platform.id == Store.platform_id)
+        .where(ShopGoodsStore.goods_id.in_(goods_ids))
+        .order_by(ShopGoodsStore.id)
+    ).all()
+    for link, store, platform in rows:
+        out.setdefault(link.goods_id, []).append(_store_link_dict(link, store, platform))
+    return out
+
+
+def _goods_store_dicts(db: Session, goods_id: int) -> list[dict]:
+    return _goods_store_map(db, [goods_id]).get(goods_id, [])
+
+
+def _with_stores(db: Session, g: ShopGoods, detail: dict) -> dict:
+    detail["stores"] = _goods_store_dicts(db, g.id) if g.id else []
+    return detail
+
+
+def _store_record_count(db: Session, goods_id: int) -> int:
+    if not goods_id:
+        return 0
+    return int(db.scalar(select(func.count()).select_from(ShopGoodsStore).where(ShopGoodsStore.goods_id == goods_id)) or 0)
+
+
+def _store_bound_to_category(db: Session, store_id: int, category_id: int) -> bool:
+    """店铺绑了当前商品分类，或绑了它的上级分类，才算匹配。"""
+    if not category_id:
+        return False
+    chain = set(ancestor_ids(db, category_id))
+    if not chain:
+        return False
+    bound = set(db.scalars(select(StoreCategory.category_id).where(StoreCategory.store_id == store_id)))
+    return bool(chain & bound)
+
+
+def _replace_goods_stores(db: Session, goods_id: int, raw, category_id: int) -> None:
+    if not isinstance(raw, list):
+        fail("店铺记录格式不正确")
+    seen: set[int] = set()
+    rows: list[tuple[int, int]] = []
+    old_urls = dict(db.execute(select(ShopGoodsStore.store_id, ShopGoodsStore.product_url).where(
+        ShopGoodsStore.goods_id == goods_id)).all())
+    old_templates = dict(db.execute(select(ShopGoodsStore.store_id, ShopGoodsStore.shipping_template_id).where(
+        ShopGoodsStore.goods_id == goods_id)).all())
+    for item in raw:
+        if not isinstance(item, dict):
+            fail("店铺记录格式不正确")
+        sid = _int(item, "store_id", "店铺")
+        if not sid:
+            continue
+        if sid in seen:
+            fail("同一个店铺只能有一条记录")
+        store = db.get(Store, sid)
+        if store is None:
+            fail("店铺不存在")
+        if not _store_bound_to_category(db, sid, category_id):
+            fail(f"店铺「{store.name}」未绑定当前商品分类")
+        seen.add(sid)
+        allowed = 1 if item.get("allowed", True) else 0
+        rows.append((sid, allowed))
+    db.execute(delete(ShopGoodsStore).where(ShopGoodsStore.goods_id == goods_id))
+    db.add_all(ShopGoodsStore(goods_id=goods_id, store_id=sid, shipping_template_id=old_templates.get(sid, 0),
+                              allowed=allowed, product_url=old_urls.get(sid) or "")
+               for sid, allowed in rows)
+
+
+def _set_goods_status(db: Session, g: ShopGoods, values: dict, creating: bool) -> None:
+    if "status" not in values:
+        if creating:
+            g.status = 0
+        return
+    on = bool(values["status"])
+    if on and not g.main_image_url:
+        fail("请至少保留一张商品共用图片，上架才能生效")
+    if on and _store_record_count(db, g.id) == 0:
+        fail("请先在「店铺」里添加记录，上架才能生效")
+    g.status = 1 if on else 0
+
+
+def _replace_images(db: Session, goods_id: int, images: list[dict]) -> None:
     db.execute(delete(ShopGoodsImage).where(ShopGoodsImage.goods_id == goods_id))
-    db.add_all(ShopGoodsImage(goods_id=goods_id, url=u, sort_order=i) for i, u in enumerate(urls))
+    db.add_all(ShopGoodsImage(goods_id=goods_id, sku_id=image["sku_id"], url=image["url"], sort_order=i)
+               for i, image in enumerate(images))
 
 
 def _sku_stats(db: Session, ids: list[int]) -> dict[int, tuple[int, int]]:
@@ -501,16 +649,262 @@ def _get_goods(db: Session, gid: int) -> ShopGoods:
     return db.get(ShopGoods, gid) or fail("商品不存在", 404)
 
 
+def _opt_money(raw, label: str) -> Decimal | None:
+    if raw in (None, ""):
+        return None
+    try:
+        d = Decimal(str(raw)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        fail(f"{label}格式不正确")
+    if d < 0 or d > Decimal("9999999999.99"):
+        fail(f"{label}超出范围")
+    return d
+
+
+def _price_range_error(lo, hi, sug) -> str | None:
+    if lo is not None and hi is not None and lo > hi:
+        return "最低售价不能高于最高售价"
+    if sug is not None and lo is not None and sug < lo:
+        return "建议售价不能低于最低售价"
+    if sug is not None and hi is not None and sug > hi:
+        return "建议售价不能高于最高售价"
+    return None
+
+
+def _days(raw, label: str) -> int | None:
+    if raw in (None, ""):
+        return None
+    if isinstance(raw, bool):
+        fail(f"{label}格式不正确")
+    try:
+        d = Decimal(str(raw))
+    except (InvalidOperation, ValueError):
+        fail(f"{label}格式不正确")
+    if d != d.to_integral_value() or d < 0 or d > 9999:
+        fail(f"{label}需为 0~9999 的整数")
+    return int(d)
+
+
+def _days_range_error(fast, slow) -> str | None:
+    if fast is not None and slow is not None and fast > slow:
+        return "最快到达天数不能大于最慢到达天数"
+    return None
+
+
+def _money_out(v):
+    return float(v) if v is not None else None
+
+
+def _region_price_dict(row: ShopGoodsRegion, name: str, sort_order: int) -> dict:
+    return {"id": row.id, "region_id": row.region_id, "region_name": name, "region_sort": sort_order,
+            "price": _money_out(row.price), "suggested_price": _money_out(row.suggested_price),
+            "min_price": _money_out(row.min_price), "max_price": _money_out(row.max_price),
+            "currency": row.currency or "", "shipping_fee": _money_out(row.shipping_fee),
+            "shipping_template_id": row.shipping_template_id,
+            "arrival_days_min": row.arrival_days_min, "arrival_days_max": row.arrival_days_max,
+            "tax": _money_out(row.tax)}
+
+
+def _region_price_map(db: Session, goods_ids: list[int]) -> dict[int, list[dict]]:
+    out: dict[int, list[dict]] = {i: [] for i in goods_ids}
+    if not goods_ids:
+        return out
+    q = (select(ShopGoodsRegion, GeoRegion.name, GeoRegion.sort_order)
+         .join(GeoRegion, GeoRegion.id == ShopGoodsRegion.region_id)
+         .where(ShopGoodsRegion.goods_id.in_(goods_ids))
+         .order_by(GeoRegion.sort_order, GeoRegion.id, ShopGoodsRegion.id))
+    for row, name, sort_order in db.execute(q):
+        out.setdefault(row.goods_id, []).append(_region_price_dict(row, name, sort_order))
+    return out
+
+
+def _mirror_region_snapshot(g: ShopGoods, rows: list[dict], regions: dict[int, GeoRegion]) -> None:
+    """商品上的销售价、运费仍镜像排序最前的区域，给旧接口和规格默认价用。列表改看区域价格。没有区域行时清成 0。"""
+    if not rows:
+        g.sale_price = Decimal("0.00")
+        g.shipping_fee = Decimal("0.00")
+        return
+    first = min(rows, key=lambda row: (regions[row["region_id"]].sort_order, row["region_id"]))
+    g.sale_price = first["price"] if first["price"] is not None else Decimal("0.00")
+    g.shipping_fee = first["shipping_fee"] if first["shipping_fee"] is not None else Decimal("0.00")
+
+
+def _replace_region_prices(db: Session, g: ShopGoods, raw_rows, creating: bool) -> None:
+    if raw_rows is None and not creating:
+        return
+    if not isinstance(raw_rows, list):
+        fail("区域价格格式不正确")
+    if len(raw_rows) > 100:
+        fail("区域价格最多 100 条")
+    old_currency = {}
+    if g.id is not None:
+        old_currency = dict(db.execute(select(ShopGoodsRegion.region_id, ShopGoodsRegion.currency)
+                                        .where(ShopGoodsRegion.goods_id == g.id)).all())
+    regions = {r.id: r for r in db.scalars(select(GeoRegion)).all()}
+    seen: set[int] = set()
+    parsed: list[dict] = []
+    for raw in raw_rows:
+        if not isinstance(raw, dict):
+            fail("区域价格格式不正确")
+        try:
+            rid = int(raw.get("region_id") or 0)
+        except (TypeError, ValueError):
+            fail("请选择区域")
+        if isinstance(raw.get("region_id"), bool) or rid not in regions:
+            fail("请选择区域")
+        if rid in seen:
+            fail(f"区域「{regions[rid].name}」重复")
+        seen.add(rid)
+        row = {
+            "region_id": rid,
+            "price": _opt_money(raw.get("price"), "价格"),
+            "suggested_price": _opt_money(raw.get("suggested_price"), "建议售价"),
+            "min_price": _opt_money(raw.get("min_price"), "最低售价"),
+            "max_price": _opt_money(raw.get("max_price"), "最高售价"),
+            "currency": normalize_currency(db, raw.get("currency"), old_currency.get(rid, "")),
+            "shipping_template_id": 0,
+            "shipping_fee": _opt_money(raw.get("shipping_fee"), "运费"),
+            "arrival_days_min": _days(raw.get("arrival_days_min"), "最快到达天数"),
+            "arrival_days_max": _days(raw.get("arrival_days_max"), "最慢到达天数"),
+            "tax": _opt_money(raw.get("tax"), "税费"),
+        }
+        try:
+            row["shipping_template_id"] = int(raw.get("shipping_template_id") or 0)
+        except (TypeError, ValueError):
+            fail(f"{regions[rid].name}：运费模板格式不正确")
+        if row["shipping_template_id"]:
+            template = db.get(ShippingTemplate, row["shipping_template_id"])
+            if template is None:
+                fail(f"{regions[rid].name}：运费模板不存在")
+        err = _price_range_error(row["min_price"], row["max_price"], row["suggested_price"])
+        if err:
+            fail(f"{regions[rid].name}：{err}")
+        err = _days_range_error(row["arrival_days_min"], row["arrival_days_max"])
+        if err:
+            fail(f"{regions[rid].name}：{err}")
+        parsed.append(row)
+    if g.id is None:
+        db.flush()
+    db.execute(delete(ShopGoodsRegion).where(ShopGoodsRegion.goods_id == g.id))
+    for row in parsed:
+        db.add(ShopGoodsRegion(goods_id=g.id, **row))
+    _mirror_region_snapshot(g, parsed, regions)
+
+
+def _region_min_price(rows: list | None) -> tuple[float | None, str]:
+    """区域价里的最低「价格」，以及给出这个价格的区域名（并列时按区域排序都列出来）。"""
+    priced = [r for r in (rows or []) if r.get("price") is not None]
+    if not priced:
+        return None, ""
+    low = min(r["price"] for r in priced)
+    names = [r.get("region_name") or "" for r in priced if r["price"] == low and r.get("region_name")]
+    return low, "、".join(names)
+
+
+def _with_region_prices(db: Session, g: ShopGoods, detail: dict) -> dict:
+    detail["region_prices"] = _region_price_map(db, [g.id]).get(g.id, [])
+    return detail
+
+
+def _en_lang_code(db: Session) -> str | None:
+    return next((c for c in inline_languages(db) if c.lower().startswith("en")), None)
+
+
+def _require_en_name(db: Session, values: dict, creating: bool) -> None:
+    """启用了英文时，商品名称 (en) 必填。没带 i18n 的局部更新不拦。"""
+    if "i18n" not in values and not creating:
+        return
+    code = _en_lang_code(db)
+    if not code:
+        return
+    pack = values.get("i18n") if isinstance(values.get("i18n"), dict) else {}
+    name = str((pack.get(code) or {}).get("name") or "").strip()
+    if not name:
+        fail("商品名称 (en)不能为空")
+
+
+def _with_catalog(db: Session, g: ShopGoods, detail: dict) -> dict:
+    item = db.scalar(select(SupplierCatalogItem).where(SupplierCatalogItem.goods_id == g.id).limit(1))
+    detail["catalog_item_id"] = item.id if item else 0
+    detail["catalog_item_name"] = item.name if item else ""
+    detail["catalog_item_sku"] = item.supplier_sku if item else ""
+    return detail
+
+
+def _unbind_catalog(item: SupplierCatalogItem) -> None:
+    item.goods_id = 0
+    if item.status == 2:
+        item.status = 1
+
+
+def _bind_catalog_item(db: Session, g: ShopGoods, values: dict) -> None:
+    """商品绑定产品池条目：写 supplier_catalog_item.goods_id；一个商品只绑一条，一条也只绑一个商品。"""
+    if "catalog_item_id" not in values:
+        return
+    iid = _int(values, "catalog_item_id", "绑定产品")
+    for old in list(db.scalars(select(SupplierCatalogItem).where(SupplierCatalogItem.goods_id == g.id))):
+        if old.id != iid:
+            _unbind_catalog(old)
+    if not iid:
+        return
+    item = db.get(SupplierCatalogItem, iid) or fail("产品目录条目不存在", 404)
+    if item.goods_id and item.goods_id != g.id:
+        fail("该产品已绑定其他商品")
+    item.goods_id = g.id
+    if item.status in (0, 1):
+        item.status = 2
+
+
+def _catalog_bind_map(db: Session, goods_ids: list[int]) -> dict[int, SupplierCatalogItem]:
+    """一个商品只绑一条产品；有多条时取 id 最小的那条。"""
+    out: dict[int, SupplierCatalogItem] = {}
+    if not goods_ids:
+        return out
+    rows = db.scalars(select(SupplierCatalogItem).where(SupplierCatalogItem.goods_id.in_(goods_ids))
+                      .order_by(SupplierCatalogItem.id)).all()
+    for item in rows:
+        out.setdefault(item.goods_id, item)
+    return out
+
+
+def _list_goods_row(g: ShopGoods, stats: tuple[int, int], regions: list[dict], stores: list[dict],
+                    catalog: SupplierCatalogItem | None) -> dict:
+    detail = _goods_dict(g, *stats)
+    low, names = _region_min_price(regions)
+    detail["region_prices"] = regions
+    detail["region_min_price"] = low
+    detail["region_min_price_region"] = names
+    detail["stores"] = stores
+    detail["store_count"] = len(stores)
+    detail["catalog_item_id"] = catalog.id if catalog else 0
+    detail["catalog_item_name"] = catalog.name if catalog else ""
+    detail["catalog_item_sku"] = catalog.supplier_sku if catalog else ""
+    return detail
+
+
 def _goods_query_fields(db: Session) -> dict:
     """列表可筛选 / 排序的字段白名单：字段名 → (SQL 表达式, 类型)。含计算列和各语言的商品名。"""
     profit = ShopGoods.sale_price - ShopGoods.cost_price - ShopGoods.shipping_fee
     sku_count = select(func.count()).where(ShopGoodsSku.goods_id == ShopGoods.id).scalar_subquery()
     stock = select(func.coalesce(func.sum(ShopGoodsSku.stock), 0)).where(ShopGoodsSku.goods_id == ShopGoods.id).scalar_subquery()
+    region_min_price = (select(func.min(ShopGoodsRegion.price))
+                        .where(ShopGoodsRegion.goods_id == ShopGoods.id, ShopGoodsRegion.price.is_not(None))
+                        .correlate(ShopGoods).scalar_subquery())
+    store_count = (select(func.count()).where(ShopGoodsStore.goods_id == ShopGoods.id)
+                   .correlate(ShopGoods).scalar_subquery())
+    catalog_name = (select(SupplierCatalogItem.name).where(SupplierCatalogItem.goods_id == ShopGoods.id)
+                    .order_by(SupplierCatalogItem.id).limit(1).scalar_subquery())
+    catalog_sku = (select(SupplierCatalogItem.supplier_sku).where(SupplierCatalogItem.goods_id == ShopGoods.id)
+                   .order_by(SupplierCatalogItem.id).limit(1).scalar_subquery())
     fields = {
         "id": (ShopGoods.id, "num"), "goods_no": (ShopGoods.goods_no, "str"), "name": (ShopGoods.name, "str"),
         "category_id": (ShopGoods.category_id, "num"), "brand": (ShopGoods.brand, "str"),
         "brand_id": (ShopGoods.brand_id, "num"), "supplier_id": (ShopGoods.supplier_id, "num"),
         "supplier": (ShopGoods.supplier, "str"), "cost_price": (ShopGoods.cost_price, "num"),
+        "region_min_price": (region_min_price, "num"),
+        "store_count": (store_count, "num"),
+        "catalog_item_name": (catalog_name, "str"), "catalog_item_sku": (catalog_sku, "str"),
+        # 销售价、运费、利润、毛利率是排序最前区域的镜像，列表不再展示，筛选仍可用
         "sale_price": (ShopGoods.sale_price, "num"), "shipping_fee": (ShopGoods.shipping_fee, "num"),
         "profit": (profit, "num"),
         "margin_pct": (case((ShopGoods.sale_price > 0, func.round(profit / ShopGoods.sale_price * 100, 1)), else_=None), "num"),
@@ -525,12 +919,31 @@ def _goods_query_fields(db: Session) -> dict:
     return fields
 
 
+def _query_ids(raw: str | None, label: str) -> list[int]:
+    """解析列表查询使用的逗号分隔 ID；只接受正整数并限制数量。"""
+    if not raw:
+        return []
+    try:
+        ids = list(dict.fromkeys(int(x) for x in raw.split(",") if x.strip()))
+    except ValueError:
+        fail(f"{label}格式不正确")
+    if not ids or len(ids) > 500 or any(i <= 0 for i in ids):
+        fail(f"{label}格式不正确")
+    return ids
+
+
 @router.get("/goods")
 def list_goods(take: int | None = None, skip: int = 0, sort: str | None = None, filter: str | None = None,
+               store_ids: str | None = None,
                db: Session = Depends(get_db)):
     """不带 take 返回全部（数组）；带 take 做服务端分页，返回 {items, total}。
     sort / filter 为 DevExtreme 表格的 JSON 参数，字段见 _goods_query_fields。"""
     q = select(ShopGoods)
+    selected_stores = _query_ids(store_ids, "店铺")
+    if selected_stores:
+        q = q.where(ShopGoods.id.in_(
+            select(ShopGoodsStore.goods_id).where(ShopGoodsStore.store_id.in_(selected_stores))
+        ))
     if take is None:
         q = q.order_by(ShopGoods.id.desc())
     else:
@@ -542,24 +955,73 @@ def list_goods(take: int | None = None, skip: int = 0, sort: str | None = None, 
         skip, take = clamp_page(skip, take)
         q = q.order_by(*build_sort(parse_json(sort, "排序"), fields), ShopGoods.id.desc()).offset(skip).limit(take)
     rows = db.scalars(q).all()
-    stats = _sku_stats(db, [g.id for g in rows])
-    items = _attach(db, "goods", [_goods_dict(g, *stats.get(g.id, (0, 0))) for g in rows], ["name"])
+    ids = [g.id for g in rows]
+    stats = _sku_stats(db, ids)
+    regions = _region_price_map(db, ids)
+    stores = _goods_store_map(db, ids)
+    catalogs = _catalog_bind_map(db, ids)
+    items = _attach(db, "goods", [
+        _list_goods_row(g, stats.get(g.id, (0, 0)), regions.get(g.id, []), stores.get(g.id, []), catalogs.get(g.id))
+        for g in rows
+    ], ["name"])
     return ok(items if take is None else {"items": items, "total": total})
 
 
 @router.get("/goods/{gid}")
 def get_goods(gid: int, db: Session = Depends(get_db)):
     g = _get_goods(db, gid)
-    images = db.scalars(select(ShopGoodsImage.url).where(ShopGoodsImage.goods_id == gid)
+    images = db.scalars(select(ShopGoodsImage).where(ShopGoodsImage.goods_id == gid)
                         .order_by(ShopGoodsImage.sort_order, ShopGoodsImage.id)).all()
     detail = {**_goods_dict(g, *_sku_stats(db, [gid]).get(gid, (0, 0))), "description": g.description or "",
-              "attr_values": g.attr_values or {}, "images": list(images)}
-    return ok(_attach(db, "goods", [detail], ["name", "description", "attr_values"])[0])
+              "attr_values": g.attr_values or {},
+              "images": [{"id": image.id, "url": image.url, "sku_id": image.sku_id,
+                          "sort_order": image.sort_order} for image in images]}
+    return ok(_attach(db, "goods", [_with_stores(db, g, _with_catalog(db, g, _with_region_prices(db, g, detail)))],
+                      ["name", "description", "attr_values"])[0])
+
+
+@router.post("/goods-no/generate")
+def generate_goods_no(values: dict, db: Session = Depends(get_db)):
+    """按最终前缀占用一个四位流水号；号码一经返回即不回收。"""
+    cid = _int(values, "category_id", "分类")
+    bid = _int(values, "brand_id", "品牌")
+    category = db.get(ShopCategory, cid) if cid else None
+    brand = db.get(Brand, bid) if bid else None
+    if category is None:
+        fail("请选择分类")
+    if not is_leaf(db, category.id):
+        fail("商品只能选择末级分类")
+    if brand is None:
+        fail("请选择品牌")
+    category_code = (category.code or "").strip()
+    if not category_code:
+        fail("所选分类未设置品类编码")
+    brand_code = (brand.code or "").strip() if brand.include_in_goods_no else "TH"
+    if not brand_code:
+        fail("所选品牌参与商品编码，但未设置品牌编码")
+    prefix = brand_code + category_code
+    if len(prefix) > 60:
+        fail("品牌编码与品类编码拼接后不能超过 60 个字符")
+    current = 0
+    while current < 9999:
+        stmt = mysql_insert(GoodsNoSequence).values(prefix=prefix, current_seq=1)
+        stmt = stmt.on_duplicate_key_update(current_seq=GoodsNoSequence.current_seq + 1)
+        db.execute(stmt)
+        current = db.scalar(select(GoodsNoSequence.current_seq).where(GoodsNoSequence.prefix == prefix)) or 0
+        candidate = f"{prefix}{current:04d}"
+        if not db.scalar(select(ShopGoods.id).where(ShopGoods.goods_no == candidate).limit(1)):
+            break
+    if current > 9999 or db.scalar(select(ShopGoods.id).where(ShopGoods.goods_no == candidate).limit(1)):
+        db.rollback()
+        fail(f"编码前缀 {prefix} 的四位流水已用完")
+    db.commit()
+    return ok({"goods_no": candidate, "prefix": prefix, "sequence": current})
 
 
 @router.post("/goods")
 def create_goods(values: dict, db: Session = Depends(get_db)):
     g = ShopGoods()
+    _require_en_name(db, values, True)
     images = _apply_goods(db, g, values, True)
     db.add(g)
     try:
@@ -567,21 +1029,37 @@ def create_goods(values: dict, db: Session = Depends(get_db)):
     except IntegrityError:
         db.rollback()
         fail("商品编码已存在")
+    if any(image["sku_id"] is not None for image in images or []):
+        fail("请先保存商品并创建 SKU，再设置 SKU 专用图片")
     if images:
         _replace_images(db, g.id, images)
+    if "region_prices" in values:
+        _replace_region_prices(db, g, values.get("region_prices") or [], True)
+    if "stores" in values:
+        _replace_goods_stores(db, g.id, values.get("stores") or [], g.category_id)
+    _set_goods_status(db, g, values, True)
+    _bind_catalog_item(db, g, values)
     save_inline(db, "goods", g, values.get("i18n"))
     db.commit()
-    return ok(_attach(db, "goods", [_goods_dict(g)], ["name"])[0])
+    return ok(_attach(db, "goods", [_with_stores(db, g, _with_catalog(db, g, _with_region_prices(db, g, _goods_dict(g))))], ["name"])[0])
 
 
 @router.put("/goods/{gid}")
 def update_goods(gid: int, values: dict, db: Session = Depends(get_db)):
     g = _get_goods(db, gid)
+    _require_en_name(db, values, False)
     images = _apply_goods(db, g, values, False)
     if images is not None:
         _replace_images(db, gid, images)
+    if "region_prices" in values:
+        _replace_region_prices(db, g, values.get("region_prices") or [], False)
+    if "stores" in values:
+        _replace_goods_stores(db, gid, values.get("stores") or [], g.category_id)
+    _set_goods_status(db, g, values, False)
+    _bind_catalog_item(db, g, values)
     _save(db, "商品编码已存在", "goods", g, values)
-    return ok(_attach(db, "goods", [_goods_dict(g, *_sku_stats(db, [gid]).get(gid, (0, 0)))], ["name"])[0])
+    detail = _with_stores(db, g, _with_catalog(db, g, _with_region_prices(db, g, _goods_dict(g, *_sku_stats(db, [gid]).get(gid, (0, 0))))))
+    return ok(_attach(db, "goods", [detail], ["name"])[0])
 
 
 @router.post("/goods/batch-status")
@@ -592,18 +1070,47 @@ def batch_goods_status(body: dict, db: Session = Depends(get_db)):
         fail("请选择 1~500 个商品")
     if not isinstance(body.get("status"), bool):
         fail("参数不合法")
-    res = db.execute(update(ShopGoods).where(ShopGoods.id.in_(ids)).values(status=1 if body["status"] else 0))
+    target_ids = ids
+    if body["status"]:
+        target_ids = []
+        for goods in db.scalars(select(ShopGoods).where(ShopGoods.id.in_(ids))):
+            links = list(db.scalars(select(ShopGoodsStore).where(
+                ShopGoodsStore.goods_id == goods.id, ShopGoodsStore.allowed == 1)))
+            if not links:
+                continue
+            target_ids.append(goods.id)
+        if not target_ids:
+            fail("选中的商品都没有配置可以上架的店铺")
+    res = db.execute(update(ShopGoods).where(ShopGoods.id.in_(target_ids)).values(status=1 if body["status"] else 0))
     db.commit()
-    return ok({"updated": res.rowcount})
+    return ok({"updated": res.rowcount, "skipped": len(ids) - len(target_ids)})
 
 
 @router.delete("/goods/{gid}")
 def delete_goods(gid: int, db: Session = Depends(get_db)):
     g = _get_goods(db, gid)
-    purge_translations(db, "sku", list(db.scalars(select(ShopGoodsSku.id).where(ShopGoodsSku.goods_id == gid))))
+    sku_ids = list(db.scalars(select(ShopGoodsSku.id).where(ShopGoodsSku.goods_id == gid)))
+    if sku_ids and db.scalar(select(ShopOrderLine.id).where(ShopOrderLine.sku_id.in_(sku_ids)).limit(1)):
+        fail("该商品已有订单快照，不能删除；请改为下架")
+    if sku_ids and (db.scalar(select(BundleComponent.id).where(BundleComponent.component_sku_id.in_(sku_ids)).limit(1)) or
+                    db.scalar(select(BundleRevision.id).where(BundleRevision.parent_sku_id.in_(sku_ids)).limit(1))):
+        fail("该商品 SKU 已被组合版本使用，不能删除")
+    if sku_ids and db.scalar(select(StockLedger.id).where(StockLedger.sku_id.in_(sku_ids)).limit(1)):
+        fail("该商品已有库存流水，不能删除；请改为下架")
+    purge_translations(db, "sku", sku_ids)
     purge_translations(db, "goods", [gid])
     db.execute(delete(ShopGoodsImage).where(ShopGoodsImage.goods_id == gid))
     db.execute(delete(ShopGoodsSku).where(ShopGoodsSku.goods_id == gid))
+    db.execute(delete(ShopGoodsSkuRegion).where(ShopGoodsSkuRegion.goods_id == gid))
+    db.execute(delete(ShopGoodsRegion).where(ShopGoodsRegion.goods_id == gid))
+    db.execute(delete(ShopGoodsStore).where(ShopGoodsStore.goods_id == gid))
+    db.execute(delete(ShopifySyncTask).where(ShopifySyncTask.goods_id == gid))
+    db.execute(delete(ShopifyVariantMap).where(ShopifyVariantMap.goods_id == gid))
+    db.execute(delete(ShopifyProductMap).where(ShopifyProductMap.goods_id == gid))
+    if sku_ids:
+        db.execute(delete(StockBalance).where(StockBalance.sku_id.in_(sku_ids)))
+    for item in list(db.scalars(select(SupplierCatalogItem).where(SupplierCatalogItem.goods_id == gid))):
+        _unbind_catalog(item)
     db.delete(g)
     db.commit()
     return ok()
@@ -612,20 +1119,29 @@ def delete_goods(gid: int, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------- SKU
 def _sku_dict(s: ShopGoodsSku) -> dict:
     return {"id": s.id, "goods_id": s.goods_id, "sku_code": s.sku_code, "spec_name": s.spec_name,
+            "sku_type": s.sku_type, "weight_g": s.weight_g,
+            "shipping_package_group_id": s.shipping_package_group_id,
             "cost_price": float(s.cost_price), "sale_price": float(s.sale_price), "stock": s.stock,
             "status": bool(s.status)}
 
 
-def _apply_sku(s: ShopGoodsSku, values: dict, creating: bool) -> None:
+def _apply_sku(s: ShopGoodsSku, values: dict, creating: bool, db: Session | None = None) -> None:
     if "sku_code" in values or creating:
         s.sku_code = _text(values, "sku_code", "SKU编码", 64, required=True)
     if "spec_name" in values or creating:
         s.spec_name = _text(values, "spec_name", "规格", 200)
+    if "weight_g" in values or creating:
+        raw_weight = values.get("weight_g")
+        s.weight_g = None if raw_weight in (None, "") else _int(values, "weight_g", "SKU重量", lo=1)
+    if "shipping_package_group_id" in values or creating:
+        s.shipping_package_group_id = _int(values, "shipping_package_group_id", "包装组")
+        if s.shipping_package_group_id and db and db.get(ShippingPackageGroup, s.shipping_package_group_id) is None:
+            fail("包装组不存在")
     for f, label in (("cost_price", "拿货价"), ("sale_price", "销售价")):
         if f in values or creating:
             setattr(s, f, _money(values, f, label))
-    if "stock" in values or creating:
-        s.stock = _int(values, "stock", "库存", -1_000_000, 1_000_000_000)
+    if creating:
+        s.stock = 0  # 旧汇总列仅兼容历史结构；主库存统一维护在 stock_balance。
     if "status" in values:
         s.status = 1 if values["status"] else 0
     elif creating:
@@ -648,9 +1164,31 @@ def create_sku(gid: int, values: dict, db: Session = Depends(get_db)):
     for f in ("cost_price", "sale_price"):
         if values[f] in (None, ""):
             values[f] = getattr(g, f)
-    _apply_sku(s, values, True)
+    _apply_sku(s, values, True, db)
     db.add(s)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        fail("SKU编码已存在")
     _save(db, "SKU编码已存在", "sku", s, values)
+    return ok(_attach(db, "sku", [_sku_dict(s)], ["spec_name"])[0])
+
+
+@router.post("/goods/{gid}/skus/default")
+def create_default_sku(gid: int, db: Session = Depends(get_db)):
+    g = _get_goods(db, gid)
+    if db.scalar(select(func.count()).select_from(ShopGoodsSku).where(ShopGoodsSku.goods_id == gid)):
+        fail("商品已有 SKU，不能再创建默认 SKU")
+    s = ShopGoodsSku(goods_id=gid, sku_code=g.goods_no, spec_name="",
+                     cost_price=g.cost_price, sale_price=g.sale_price, stock=0, status=1)
+    db.add(s)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        fail("商品编码已被其它 SKU 使用，请手工填写 SKU 编码")
+    db.refresh(s)
     return ok(_attach(db, "sku", [_sku_dict(s)], ["spec_name"])[0])
 
 
@@ -664,7 +1202,13 @@ def _get_sku(db: Session, gid: int, sid: int) -> ShopGoodsSku:
 @router.put("/goods/{gid}/skus/{sid}")
 def update_sku(gid: int, sid: int, values: dict, db: Session = Depends(get_db)):
     s = _get_sku(db, gid, sid)
-    _apply_sku(s, values, False)
+    _apply_sku(s, values, False, db)
+    goods = _get_goods(db, gid)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        fail("SKU编码已存在")
     _save(db, "SKU编码已存在", "sku", s, values)
     return ok(_attach(db, "sku", [_sku_dict(s)], ["spec_name"])[0])
 
@@ -672,8 +1216,116 @@ def update_sku(gid: int, sid: int, values: dict, db: Session = Depends(get_db)):
 @router.delete("/goods/{gid}/skus/{sid}")
 def delete_sku(gid: int, sid: int, db: Session = Depends(get_db)):
     s = _get_sku(db, gid, sid)
+    if db.scalar(select(ShopGoodsImage.id).where(ShopGoodsImage.goods_id == gid,
+                                                 ShopGoodsImage.sku_id == sid).limit(1)):
+        fail("该 SKU 还有专用图片，请先删除图片或改为商品共用图片")
+    if db.scalar(select(BundleComponent.id).where(BundleComponent.component_sku_id == sid).limit(1)):
+        fail("该 SKU 已被组合版本用作组件，不能删除")
+    if db.scalar(select(BundleRevision.id).where(BundleRevision.parent_sku_id == sid).limit(1)):
+        fail("该 SKU 已有组合版本，不能删除")
+    if db.scalar(select(ShopOrderLine.id).where(ShopOrderLine.sku_id == sid).limit(1)):
+        fail("该 SKU 已有订单快照，不能删除")
+    if db.scalar(select(StockLedger.id).where(StockLedger.sku_id == sid).limit(1)):
+        fail("该 SKU 已有库存流水，不能删除；请改为停用")
     purge_translations(db, "sku", [s.id])
+    db.execute(delete(ShopGoodsSkuRegion).where(ShopGoodsSkuRegion.sku_id == sid))
+    db.execute(delete(ShopifyVariantMap).where(ShopifyVariantMap.sku_id == sid))
+    db.execute(delete(StockBalance).where(StockBalance.sku_id == sid))
     db.delete(s)
+    db.commit()
+    return ok()
+
+
+def _sku_region_dict(row: ShopGoodsSkuRegion, sku: ShopGoodsSku, region: GeoRegion) -> dict:
+    return {"id": row.id, "goods_id": row.goods_id, "sku_id": row.sku_id,
+            "sku_code": sku.sku_code, "spec_name": sku.spec_name,
+            "region_id": row.region_id, "region_name": region.name,
+            "price": float(row.price) if row.price is not None else None,
+            "suggested_price": float(row.suggested_price) if row.suggested_price is not None else None,
+            "min_price": float(row.min_price) if row.min_price is not None else None,
+            "max_price": float(row.max_price) if row.max_price is not None else None,
+            "created_at": _fmt(row.created_at), "updated_at": _fmt(row.updated_at)}
+
+
+def _apply_sku_region(db: Session, gid: int, row: ShopGoodsSkuRegion, values: dict, creating: bool) -> None:
+    if "sku_id" in values or creating:
+        try:
+            sid = int(values.get("sku_id") or 0)
+        except (TypeError, ValueError):
+            fail("请选择 SKU")
+        sku = db.get(ShopGoodsSku, sid)
+        if not sku or sku.goods_id != gid:
+            fail("请选择当前商品的 SKU")
+        row.sku_id = sid
+    if "region_id" in values or creating:
+        try:
+            rid = int(values.get("region_id") or 0)
+        except (TypeError, ValueError):
+            fail("请选择区域")
+        if not db.get(GeoRegion, rid):
+            fail("请选择区域")
+        row.region_id = rid
+    for field, label in (("price", "价格"), ("suggested_price", "建议售价"),
+                         ("min_price", "最低售价"), ("max_price", "最高售价")):
+        if field in values or creating:
+            setattr(row, field, _opt_money(values.get(field), label))
+    err = _price_range_error(row.min_price, row.max_price, row.suggested_price)
+    if err:
+        fail(err)
+    if row.price is None and row.suggested_price is None and row.min_price is None and row.max_price is None:
+        fail("SKU 区域价格至少填写一项")
+
+
+@router.get("/goods/{gid}/sku-region-prices")
+def list_sku_region_prices(gid: int, db: Session = Depends(get_db)):
+    _get_goods(db, gid)
+    rows = db.execute(select(ShopGoodsSkuRegion, ShopGoodsSku, GeoRegion)
+                      .join(ShopGoodsSku, ShopGoodsSku.id == ShopGoodsSkuRegion.sku_id)
+                      .join(GeoRegion, GeoRegion.id == ShopGoodsSkuRegion.region_id)
+                      .where(ShopGoodsSkuRegion.goods_id == gid)
+                      .order_by(GeoRegion.sort_order, ShopGoodsSku.id))
+    return ok([_sku_region_dict(row, sku, region) for row, sku, region in rows])
+
+
+@router.post("/goods/{gid}/sku-region-prices")
+def create_sku_region_price(gid: int, values: dict, db: Session = Depends(get_db)):
+    _get_goods(db, gid)
+    row = ShopGoodsSkuRegion(goods_id=gid)
+    _apply_sku_region(db, gid, row, values, True)
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        fail("同一个 SKU 在同一区域只能有一条价格")
+    db.refresh(row)
+    sku, region = db.get(ShopGoodsSku, row.sku_id), db.get(GeoRegion, row.region_id)
+    return ok(_sku_region_dict(row, sku, region))
+
+
+def _get_sku_region(db: Session, gid: int, row_id: int) -> ShopGoodsSkuRegion:
+    row = db.get(ShopGoodsSkuRegion, row_id)
+    if not row or row.goods_id != gid:
+        fail("SKU 区域价格不存在", 404)
+    return row
+
+
+@router.put("/goods/{gid}/sku-region-prices/{row_id}")
+def update_sku_region_price(gid: int, row_id: int, values: dict, db: Session = Depends(get_db)):
+    row = _get_sku_region(db, gid, row_id)
+    _apply_sku_region(db, gid, row, values, False)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        fail("同一个 SKU 在同一区域只能有一条价格")
+    db.refresh(row)
+    return ok(_sku_region_dict(row, db.get(ShopGoodsSku, row.sku_id), db.get(GeoRegion, row.region_id)))
+
+
+@router.delete("/goods/{gid}/sku-region-prices/{row_id}")
+def delete_sku_region_price(gid: int, row_id: int, db: Session = Depends(get_db)):
+    db.delete(_get_sku_region(db, gid, row_id))
     db.commit()
     return ok()
 

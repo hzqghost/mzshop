@@ -4,16 +4,16 @@
 <meta charset="utf-8">
 <title>mzShop 管理后台</title>
 <link rel="stylesheet" href="/static/js/plugins/fontawesome/css/all.min.css">
-<link rel="stylesheet" href="/static/css/adminLayout.css">
+<link rel="stylesheet" href="/static/css/adminLayout.css?v=20261119-3">
 <script>window.APP = {HOST: '', LOCALE: 'zh-CN'};</script>
 <script src="/static/js/jquery-3.7.1.min.js"></script>
-<script src="/static/js/lib/adminLayout.js"></script>
+<script src="/static/js/lib/adminLayout.js?v=20261120"></script>
 </head>
 <body>
-{% macro render_menu(nodes, is_root=false, root_icon='') %}
+{% macro render_menu(nodes, is_root=false) %}
 <ul class="{{ 'menu-root' if is_root else 'menu-children' }}">
 {% for node in nodes %}
-    {% set icon = node.icon|default('') if is_root else root_icon %}
+    {% set icon = node.icon|default('') %}
     {% if node.children %}
     <li class="menu-group">
         <div class="menu-group-title">
@@ -21,10 +21,11 @@
             <span class="menu-text">{{ node.title }}</span>
             <i class="fa fa-chevron-down menu-caret"></i>
         </div>
-        {{ render_menu(node.children, false, icon) }}
+        {{ render_menu(node.children, false) }}
     </li>
     {% else %}
     <li class="menu-item" data-url="{{ node.url }}" data-title="{{ node.title }}"{% if icon %} data-icon="{{ icon }}"{% endif %}>
+        {% if icon %}<i class="fa {{ icon }} menu-item-icon"></i>{% endif %}
         <span class="menu-text">{{ node.title }}</span>
     </li>
     {% endif %}
@@ -33,7 +34,7 @@
 {% endmacro %}
 
 <div id="appShell">
-    <div id="sidebar">
+    <div id="sidebar" style="--sidebar-width: {{ menu_style.width }}px">
         <div id="sidebarHeader">
             <i class="fa fa-bars"></i><span class="logo-text">mzShop</span>
             <span class="theme-toggle" id="themeToggle" title="切换白天 / 夜晚"></span>
@@ -42,13 +43,13 @@
     </div>
 
     <div class="dropdown-menu" id="tabContextMenu">
-        <div data-action="openInBrowser">在浏览器中打开链接</div>
+        <div data-action="openInBrowser">新窗口打开</div>
+        <div data-action="copyLink">复制链接</div>
         <div class="menu-sep"></div>
-        <div data-action="close">关闭</div>
-        <div data-action="closeLeft">关闭左侧选项卡</div>
-        <div data-action="closeRight">关闭右侧选项卡</div>
-        <div data-action="closeOthers">关闭其他选项卡</div>
-        <div data-action="closeAll">关闭全部选项卡</div>
+        <div data-action="closeOthers">关闭其他</div>
+        <div data-action="closeRight">关闭右侧</div>
+        <div data-action="closeLeft">关闭左侧</div>
+        <div data-action="closeAll">关闭全部</div>
     </div>
 
     <div id="main">

@@ -1,0 +1,75 @@
+<section class="monozex-home">
+  <div class="monozex-home__hero monozex-home__container" style="background-image: url('{{ 'monozex-hero-v2.png' | asset_url }}');">
+    <div class="monozex-home__hero-copy">
+      <p class="monozex-home__eyebrow">Branding</p>
+      <h1>Essentials.<br>Modern<br>Discoveries.</h1>
+      <p class="monozex-home__lede">
+        We considered beauty, fragrance and form from a clear point of view: pure forms, useful objects, quiet discovery.
+      </p>
+      <div class="monozex-home__actions">
+        <a class="button" href="{{ routes.all_products_collection_url }}">Explore the collection</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="monozex-home__principles">
+    <div class="monozex-home__container monozex-home__principles-grid">
+      <div><span>01</span><strong>Selected with purpose</strong><p>A focused edit of beauty, fragrance and daily essentials.</p></div>
+      <div><span>02</span><strong>Made for discovery</strong><p>Clear categories and meaningful product details make choosing simple.</p></div>
+      <div><span>03</span><strong>Connected globally</strong><p>International sourcing from Guangzhou, delivered with care.</p></div>
+    </div>
+  </div>
+
+  <div class="monozex-home__story monozex-home__container">
+    <p class="monozex-home__eyebrow">Our point of view</p>
+    <div>
+      <h2>Minimal by nature.<br>Open to the unexpected.</h2>
+      <p>
+        The name Monozex combines <em>mono</em> — singular, pure and minimal — with a sense of reset,
+        possibility and order. The result is a calm, contemporary store built around products worth noticing.
+      </p>
+      <p class="monozex-home__company">Guangzhou Monozex Trading Co., Ltd. · monozex.com</p>
+    </div>
+  </div>
+</section>
+
+{% stylesheet %}
+  .monozex-home { --mz-ink: #082f2e; --mz-cream: #f4efe7; --mz-gold: #c7a77b; color: var(--mz-ink); }
+  .monozex-home__container { width: min(calc(100% - 80px), var(--narrow-page-width)); margin-inline: auto; }
+  .monozex-home__hero { min-height: min(720px, 74vh); display: flex; align-items: center; padding: clamp(64px, 8vw, 120px) clamp(28px, 6vw, 92px); overflow: hidden; background-position: center; background-size: cover; background-repeat: no-repeat; }
+  .monozex-home__hero-copy { width: min(490px, 48%); }
+  .monozex-home__eyebrow { margin: 0 0 18px; color: #6e7069; font-size: 11px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; }
+  .monozex-home__hero h1 { margin: 0; font-family: var(--font-heading--family); font-size: clamp(52px, 5vw, 76px); font-weight: 600; letter-spacing: -.05em; line-height: .92; }
+  .monozex-home__lede { max-width: 460px; margin: 28px 0 0; font-size: clamp(15px, 1.2vw, 18px); line-height: 1.55; }
+  .monozex-home__actions { display: flex; align-items: center; gap: 28px; margin-top: 38px; }
+  .monozex-home__text-link, .monozex-home__section-heading a { color: inherit; text-underline-offset: 5px; }
+  .monozex-home__principles { background: var(--mz-ink); color: var(--mz-cream); }
+  .monozex-home__principles-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; padding-block: 0; }
+  .monozex-home__principles-grid > div { min-height: 210px; padding: 46px 5vw 44px 0; border-right: 1px solid rgba(244,239,231,.2); }
+  .monozex-home__principles-grid > div + div { padding-left: 5vw; }
+  .monozex-home__principles-grid > div:last-child { border: 0; }
+  .monozex-home__principles span { display: block; margin-bottom: 32px; color: var(--mz-gold); font-size: 11px; }
+  .monozex-home__principles strong { display: block; font-family: var(--font-heading--family); font-size: 22px; font-weight: 500; }
+  .monozex-home__principles p { max-width: 330px; margin: 10px 0 0; color: rgba(244,239,231,.72); line-height: 1.55; }
+  .monozex-home__story { display: grid; grid-template-columns: .55fr 1.45fr; gap: 5vw; padding-block: clamp(80px, 10vw, 150px); border-top: 1px solid #d8d1c7; }
+  .monozex-home__story h2 { margin: 0 0 30px; font-family: var(--font-heading--family); font-size: clamp(42px, 6vw, 82px); font-weight: 400; letter-spacing: -.045em; line-height: 1; }
+  .monozex-home__story div > p { max-width: 720px; font-size: 18px; line-height: 1.7; }
+  .monozex-home__story .monozex-home__company { margin-top: 36px; color: #6e7069; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  @media screen and (max-width: 749px) {
+    .monozex-home__container { width: calc(100% - 32px); }
+    .monozex-home__hero { min-height: 600px; align-items: flex-end; padding: 48px 24px; background-position: 58% center; }
+    .monozex-home__hero-copy { width: 100%; }
+    .monozex-home__actions { align-items: flex-start; flex-direction: column; gap: 20px; }
+    .monozex-home__principles-grid, .monozex-home__story { grid-template-columns: 1fr; }
+    .monozex-home__principles-grid > div, .monozex-home__principles-grid > div + div { min-height: 0; padding: 34px 0; border-right: 0; border-bottom: 1px solid rgba(244,239,231,.2); }
+    .monozex-home__story { gap: 20px; }
+  }
+{% endstylesheet %}
+
+{% schema %}
+{
+  "name": "Monozex home",
+  "settings": [],
+  "presets": [{ "name": "Monozex home" }]
+}
+{% endschema %}

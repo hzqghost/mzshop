@@ -12,8 +12,8 @@
     <div id="itemForm"></div>
 </div>
 <script src="/static/js/plugins/tinymce/tinymce.min.js"></script>
-<script src="/static/js/lib/shop.js"></script>
-<script src="/static/js/lib/supplierCatalog.js"></script>
+<script src="/static/js/lib/shop.js?v=20261119-3"></script>
+<script src="/static/js/lib/supplierCatalog.js?v=20261119-1"></script>
 <script>
 var params = new URLSearchParams(location.search);
 var itemId = parseInt(params.get('id'), 10) || null;
@@ -261,16 +261,57 @@ function initMaterialEditor(html) {
 $(function () {
     var blank = {
         supplier_id: null, supplier_sku: '', name: '', brand_id: 0, category_name: '', category_id: 0,
-        price: null, currency: '', stock: null, moq: '', status: 0, source_url: '',
+        purchase_price: null, price: null, suggested_price: null, min_price: null, max_price: null, price_rule: '', lead_time: '',
+        currency: '', region_prices: [], stock: null, moq: '', status: 0, source_url: '',
         images: [], attachments: [],
         remark: '', source_type: 'manual', goods_id: 0
     };
     var load = itemId ? SUP.call('GET', '/items/' + itemId) : $.Deferred().resolve(blank).promise();
-    load.then(function (row) { build($.extend(blank, row)); }, function (msg) { apiError(msg); $('#itemForm').text('产品加载失败：' + msg); });
+    load.then(function (row) {
+        return $.ajax({ url: APP.HOST + '/api/v1/regions', method: 'GET' }).then(function (res) {
+            if (!res || res.code !== 0) { return $.Deferred().reject((res && res.msg) || '区域加载失败').promise(); }
+            return { row: row, regions: res.data || [] };
+        }, function (xhr) {
+            return $.Deferred().reject((xhr.responseJSON && xhr.responseJSON.msg) || '区域加载失败').promise();
+        });
+    }).then(function (pack) {
+        build($.extend(blank, pack.row), pack.regions);
+    }, function (msg) { apiError(msg); $('#itemForm').text('产品加载失败：' + msg); });
 });
 
-function build(data) {
-    var form, $images, $files;
+function regionRows(row) {
+    var list = (row.region_prices || []).map(function (r) {
+        return {
+            id: r.id, region_id: r.region_id,
+            price: r.price, suggested_price: r.suggested_price, min_price: r.min_price, max_price: r.max_price,
+            currency: r.currency || '', shipping_fee: r.shipping_fee,
+            arrival_days_min: r.arrival_days_min, arrival_days_max: r.arrival_days_max, tax: r.tax
+        };
+    });
+    if (list.length) { return list; }
+    var has = ['price', 'suggested_price', 'min_price', 'max_price', 'currency'].some(function (k) {
+        return row[k] !== null && row[k] !== undefined && row[k] !== '';
+    });
+    if (!has) { return []; }
+    return [{
+        region_id: null, price: row.price, suggested_price: row.suggested_price,
+        min_price: row.min_price, max_price: row.max_price, currency: row.currency || '',
+        shipping_fee: null, arrival_days_min: null, arrival_days_max: null, tax: null
+    }];
+}
+
+function build(data, regions) {
+    var form, $images, $files, regionGrid;
+    regions = (regions || []).slice().sort(function (a, b) {
+        return (a.sort_order - b.sort_order) || (a.id - b.id);
+    });
+    var regionRank = {};
+    regions.forEach(function (r) { regionRank[r.id] = r.sort_order; });
+    data.region_prices = regionRows(data);
+    data.region_prices.forEach(function (r, i) {
+        r._kid = r.id || ('n' + i);
+        r.region_sort = r.region_id ? regionRank[r.region_id] : 1000000;
+    });
     data.images = mediaList(data.images);
     data.attachments = mediaList(data.attachments);
     if (data.main_image_url && !data.images.some(function (x) { return x.url === data.main_image_url; })) {
@@ -285,26 +326,26 @@ function build(data) {
         items: [
             { itemType: 'group', caption: '基本信息', colCount: 2, colSpan: 2, labelLocation: 'left', items: [
                 {
-                    dataField: 'supplier_id', label: { text: '供应商' }, editorType: 'dxSelectBox',
+                    dataField: 'supplier_id', label: { text: '供应商' }, editorType: 'dxLookup',
                     validationRules: [{ type: 'required', message: '请选择供应商' }],
-                    editorOptions: { dataSource: SUP.supplierSource(), valueExpr: 'id', displayExpr: 'name', searchEnabled: true, placeholder: '请选择供应商' }
+                    editorOptions: Shop.dictLookup({ dataSource: SUP.supplierSource(), displayExpr: 'name', placeholder: '请选择供应商' })
                 },
                 { dataField: 'supplier_sku', label: { text: '货号/SKU' }, validationRules: [{ type: 'required', message: '请输入货号/SKU' }, { type: 'stringLength', max: 100, message: '最长 100 个字符' }] },
                 { dataField: 'name', label: { text: '产品名称' }, colSpan: 2, validationRules: [{ type: 'required', message: '请输入产品名称' }, { type: 'stringLength', max: 300, message: '最长 300 个字符' }] },
                 {
-                    dataField: 'brand_id', label: { text: '品牌' }, editorType: 'dxSelectBox',
-                    editorOptions: { dataSource: SUP.brandSource('未知'), valueExpr: 'id', displayExpr: 'name', searchEnabled: true }
+                    dataField: 'brand_id', label: { text: '品牌' }, editorType: 'dxLookup',
+                    editorOptions: Shop.dictLookup({ dataSource: SUP.brandSource('未知'), displayExpr: 'name', placeholder: '请选择品牌' })
                 },
                 { dataField: 'category_name', label: { text: '供应商分类' }, validationRules: [{ type: 'stringLength', max: 200, message: '最长 200 个字符' }] },
                 {
-                    dataField: 'category_id', label: { text: '商品分类' }, editorType: 'dxSelectBox', colSpan: 2,
-                    editorOptions: { dataSource: Shop.categorySource('未映射'), valueExpr: 'id', displayExpr: 'full_name', searchEnabled: true }
+                    dataField: 'category_id', label: { text: '商品分类' }, editorType: 'dxLookup', colSpan: 2,
+                    editorOptions: Shop.dictLookup({ dataSource: Shop.categorySource('未映射'), displayExpr: 'full_name', placeholder: '请选择商品分类' })
                 },
-                { dataField: 'price', label: { text: '价格' }, editorType: 'dxNumberBox', editorOptions: { min: 0, format: '#,##0.00', showSpinButtons: false } },
-                {
-                    dataField: 'currency', label: { text: '币种' }, editorType: 'dxSelectBox',
-                    editorOptions: { dataSource: SUP.currencySource(), valueExpr: 'code', displayExpr: 'label', showClearButton: true, searchEnabled: true }
-                },
+                { dataField: 'purchase_price', label: { text: '采购价' }, editorType: 'dxNumberBox', editorOptions: { min: 0, format: '#,##0.00', showSpinButtons: false } },
+                { dataField: 'lead_time', label: { text: '交期' }, validationRules: [{ type: 'stringLength', max: 100, message: '最长 100 个字符' }] },
+                { dataField: 'price_rule', label: { text: '价格规则' }, colSpan: 2, editorType: 'dxTextArea',
+                  editorOptions: { height: 72, maxLength: 2000 },
+                  validationRules: [{ type: 'stringLength', max: 2000, message: '最长 2000 个字符' }] },
                 { dataField: 'stock', label: { text: '库存' }, editorType: 'dxNumberBox', editorOptions: { min: 0, format: '#,##0', showSpinButtons: false } },
                 { dataField: 'moq', label: { text: '起订量' }, validationRules: [{ type: 'stringLength', max: 50, message: '最长 50 个字符' }] },
                 {
@@ -323,6 +364,14 @@ function build(data) {
                     renderFiles();
                 } }
             ] },
+            { itemType: 'group', caption: '区域价格', colSpan: 2, items: [
+                { template: function (_, el) {
+                    var $grid = $('<div class="region-price-grid"></div>').appendTo(el);
+                    regionGrid = new DxGrid($grid[0], regionGridOptions());
+                    setTimeout(function () { regionGrid.updateDimensions(); }, 0);
+                    $('<div class="media-hint"></div>').text('每个区域一行，顺序跟「区域」页的排序一致。价格、建议售价、最低售价、最高售价、币种、运费、到达天数和税费都按区域填写。').appendTo(el);
+                } }
+            ] },
             { itemType: 'group', caption: '资料', colCount: 2, colSpan: 2, labelLocation: 'left', items: [
                 { label: { text: '资料' }, colSpan: 2, template: function (_, el) {
                     $('<textarea id="remarkEditor"></textarea>').appendTo(el);
@@ -331,6 +380,96 @@ function build(data) {
             ] }
         ]
     }).dxForm('instance');
+
+    function priceNum(v) { return v === null || v === undefined || v === '' ? null : Number(v); }
+    function rowPriceOk(row) {
+        var lo = priceNum(row.min_price), hi = priceNum(row.max_price), sug = priceNum(row.suggested_price);
+        if (lo !== null && hi !== null && !isNaN(lo) && !isNaN(hi) && lo > hi) { return false; }
+        if (sug !== null && !isNaN(sug) && lo !== null && !isNaN(lo) && sug < lo) { return false; }
+        if (sug !== null && !isNaN(sug) && hi !== null && !isNaN(hi) && sug > hi) { return false; }
+        return true;
+    }
+    function rowDaysOk(row) {
+        var fast = priceNum(row.arrival_days_min), slow = priceNum(row.arrival_days_max);
+        if (fast === null || slow === null || isNaN(fast) || isNaN(slow)) { return true; }
+        return fast <= slow;
+    }
+    function regionGridOptions() {
+        function moneyCol(field, caption) {
+            return { dataField: field, caption: caption, dataType: 'number', format: '#,##0.00', width: 100,
+                editorOptions: { min: 0, format: '#,##0.00', showSpinButtons: false } };
+        }
+        return {
+            dataSource: data.region_prices,
+            keyExpr: '_kid',
+            height: 320,
+            dxFeatures: false,
+            selection: { mode: 'none' },
+            scrolling: { mode: 'standard', showScrollbar: 'always', useNative: true },
+            paging: { enabled: false },
+            pager: { visible: false },
+            filterRow: { visible: false },
+            headerFilter: { visible: false },
+            searchPanel: { visible: false },
+            sorting: { mode: 'single' },
+            noDataText: '还没有区域价格',
+            editing: {
+                mode: 'row', allowAdding: true, allowUpdating: true, allowDeleting: true, useIcons: true,
+                texts: { addRow: '新增区域', confirmDeleteMessage: '确定去掉这个区域的价格吗？' }
+            },
+            onInitNewRow: function (e) {
+                e.data._kid = 'n' + Date.now();
+                e.data.region_sort = 1000000;
+                e.data.currency = '';
+            },
+            onEditorPreparing: function (e) {
+                if (e.dataField !== 'region_id' || !e.row || !e.row.data) { return; }
+                var current = e.row.data.region_id;
+                var used = {};
+                data.region_prices.forEach(function (r) {
+                    if (r.region_id && r.region_id !== current) { used[r.region_id] = 1; }
+                });
+                e.editorOptions.dataSource = regions.filter(function (r) { return !used[r.id]; });
+            },
+            columns: [
+                { dataField: 'region_sort', visible: false, allowEditing: false, sortOrder: 'asc', sortIndex: 0 },
+                {
+                    dataField: 'region_id', caption: '区域', minWidth: 140,
+                    lookup: { dataSource: regions, valueExpr: 'id', displayExpr: 'name' },
+                    setCellValue: function (row, value) {
+                        row.region_id = value;
+                        row.region_sort = value ? regionRank[value] : 1000000;
+                    },
+                    validationRules: [{ type: 'required', message: '请选择区域' }, {
+                        type: 'custom', message: '同一个区域只能有一条',
+                        validationCallback: function (e) {
+                            return !data.region_prices.some(function (r) { return r._kid !== e.data._kid && r.region_id === e.value; });
+                        }
+                    }]
+                },
+                moneyCol('price', '价格'),
+                $.extend(moneyCol('suggested_price', '建议售价'), { validationRules: [{ type: 'custom', message: '建议售价需在最低售价和最高售价之间', validationCallback: function (e) { return rowPriceOk(e.data); } }] }),
+                $.extend(moneyCol('min_price', '最低售价'), { validationRules: [{ type: 'custom', message: '最低售价不能高于最高售价', validationCallback: function (e) { return rowPriceOk(e.data); } }] }),
+                $.extend(moneyCol('max_price', '最高售价'), { validationRules: [{ type: 'custom', message: '最高售价不能低于最低售价', validationCallback: function (e) { return rowPriceOk(e.data); } }] }),
+                {
+                    dataField: 'currency', caption: '币种', width: 130,
+                    lookup: { dataSource: SUP.currencySource(), valueExpr: 'code', displayExpr: 'label', allowClearing: true }
+                },
+                moneyCol('shipping_fee', '运费'),
+                {
+                    dataField: 'arrival_days_min', caption: '最快到达', dataType: 'number', format: '#0', width: 90,
+                    editorOptions: { min: 0, max: 9999, format: '#' },
+                    validationRules: [{ type: 'custom', message: '最快到达不能大于最慢到达', validationCallback: function (e) { return rowDaysOk(e.data); } }]
+                },
+                {
+                    dataField: 'arrival_days_max', caption: '最慢到达', dataType: 'number', format: '#0', width: 90,
+                    editorOptions: { min: 0, max: 9999, format: '#' },
+                    validationRules: [{ type: 'custom', message: '最慢到达不能小于最快到达', validationCallback: function (e) { return rowDaysOk(e.data); } }]
+                },
+                moneyCol('tax', '税费')
+            ]
+        };
+    }
 
     function setTitle() {
         $('#editTitle').text(itemId ? '编辑产品' + (data.name ? ' · ' + data.name : '') : '新增产品');
@@ -342,7 +481,9 @@ function build(data) {
         $images.empty();
         data.images.forEach(function (item, i) {
             var $it = $('<div class="media-thumb"></div>').appendTo($images);
-            $('<img>').attr({ src: item.url, alt: item.name || '' }).appendTo($it);
+            $('<a class="media-open" target="_blank" rel="noopener"></a>').attr('href', item.url)
+                .append($('<img>').attr({ src: item.url, alt: item.name || '' }))
+                .appendTo($it);
             if (i === 0) { $('<span class="media-main">主图</span>').appendTo($it); }
             var $bar = $('<div class="media-ops"></div>').appendTo($it);
             if (i > 0) {
@@ -443,16 +584,52 @@ function build(data) {
         chain.fail(function (msg) { apiError(msg); });
     }
 
+    function collectRegionPrices() {
+        var rows = [], seen = {}, error = '';
+        function blankNum(v) { return v === undefined || v === '' ? null : v; }
+        data.region_prices.forEach(function (r) {
+            var empty = !r.region_id && priceNum(r.price) === null && priceNum(r.suggested_price) === null
+                && priceNum(r.min_price) === null && priceNum(r.max_price) === null && !r.currency
+                && priceNum(r.shipping_fee) === null && priceNum(r.arrival_days_min) === null
+                && priceNum(r.arrival_days_max) === null && priceNum(r.tax) === null;
+            if (empty) { return; }
+            if (!r.region_id) { error = error || '请为区域价格选择区域'; return; }
+            if (seen[r.region_id]) { error = error || '同一个区域只能有一条价格'; return; }
+            seen[r.region_id] = 1;
+            if (!rowPriceOk(r)) { error = error || '建议售价需在最低售价和最高售价之间'; return; }
+            if (!rowDaysOk(r)) { error = error || '最快到达天数不能大于最慢到达天数'; return; }
+            rows.push({
+                region_id: r.region_id,
+                price: blankNum(r.price), suggested_price: blankNum(r.suggested_price),
+                min_price: blankNum(r.min_price), max_price: blankNum(r.max_price),
+                currency: r.currency || '', shipping_fee: blankNum(r.shipping_fee),
+                arrival_days_min: blankNum(r.arrival_days_min), arrival_days_max: blankNum(r.arrival_days_max),
+                tax: blankNum(r.tax)
+            });
+        });
+        return { rows: rows, error: error };
+    }
+
     function save() {
         if (!form.validate().isValid) { return; }
+        var regionsReady = regionGrid && regionGrid.hasEditData() ? regionGrid.saveEditData() : $.Deferred().resolve().promise();
         var editor = window.tinymce && tinymce.get('remarkEditor');
         var btn = $('#btnSave').dxButton('instance');
         btn.option('disabled', true);
         saving = true;
         var fresh = [];
-        var ready = editor ? flushPending(editor) : $.Deferred().resolve([]).promise();
+        var ready = regionsReady.then(function () {
+            if (regionGrid && regionGrid.hasEditData()) {
+                return $.Deferred().reject('区域价格还有未通过校验的修改').promise();
+            }
+            return editor ? flushPending(editor) : $.Deferred().resolve([]).promise();
+        }, function () {
+            return $.Deferred().reject('区域价格还有未通过校验的修改').promise();
+        });
         ready.then(function (urls) {
             fresh = urls || [];
+            var regionPayload = collectRegionPrices();
+            if (regionPayload.error) { return $.Deferred().reject(regionPayload.error).promise(); }
             data.remark = editor ? editor.getContent() : (data.remark || '');
             if (/blob:|data:image|data:application/i.test(data.remark) || editor.getBody().querySelector('[data-local]')) {
                 return $.Deferred().reject('资料里还有未上传的文件，请重新保存').promise();
@@ -460,7 +637,9 @@ function build(data) {
             var body = {
                 supplier_id: data.supplier_id, supplier_sku: data.supplier_sku, name: data.name,
                 brand_id: data.brand_id || 0, category_name: data.category_name || '', category_id: data.category_id || 0,
-                price: data.price === undefined ? null : data.price, currency: data.currency || '',
+                purchase_price: data.purchase_price === undefined ? null : data.purchase_price,
+                price_rule: data.price_rule || '', lead_time: data.lead_time || '',
+                region_prices: regionPayload.rows,
                 stock: data.stock === undefined ? null : data.stock, moq: data.moq || '',
                 status: data.status == null ? 0 : data.status, source_url: data.source_url || '',
                 images: data.images, attachments: data.attachments, remark: data.remark || ''
@@ -474,6 +653,13 @@ function build(data) {
                 if (creating) { itemId = res.id; }
                 freshUrls = [];
                 data.main_image_url = (data.images[0] && data.images[0].url) || '';
+                data.purchase_price = res.purchase_price;
+                data.region_prices = regionRows(res);
+                data.region_prices.forEach(function (r, i) {
+                    r._kid = r.id || ('n' + i);
+                    r.region_sort = r.region_id ? (regionRank[r.region_id] == null ? 1000000 : regionRank[r.region_id]) : 1000000;
+                });
+                regionGrid.option('dataSource', data.region_prices);
                 setTitle();
             });
         }).then(null, function (msg) {
@@ -486,12 +672,14 @@ function build(data) {
 .edit-bar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: #fff; border-bottom: 1px solid #e3e3e3; }
 .edit-title { font-size: 15px; font-weight: 600; }
 .edit-actions { display: flex; gap: 8px; }
-.edit-body { max-width: 1100px; }
+.edit-body { max-width: 1280px; }
+.region-price-grid { width: 100%; }
 .tox-tinymce { border-radius: 4px; }
 .media-editor { width: 100%; box-sizing: border-box; border: 1px solid var(--fs-input-border, #ddd); border-radius: var(--fs-radius, 4px); background: var(--fs-input-bg, #fff); padding: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
 .media-editor.is-drop { border-color: var(--fs-input-focus, #1976d2); box-shadow: 0 0 0 1px var(--fs-input-focus, #1976d2); }
 .media-thumb, .media-add { width: 72px; height: 72px; border: 1px solid #e0e0e0; border-radius: 4px; position: relative; overflow: hidden; background: #fafafa; }
-.media-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.media-open { display: block; width: 100%; height: 100%; }
+.media-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; cursor: pointer; }
 .media-main { position: absolute; left: 0; top: 0; background: #1976d2; color: #fff; font-size: 11px; line-height: 16px; padding: 0 4px; }
 .media-ops { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.55); display: flex; justify-content: space-around; }
 .media-ops a, .media-del { color: #fff; font-size: 11px; text-decoration: none; }
