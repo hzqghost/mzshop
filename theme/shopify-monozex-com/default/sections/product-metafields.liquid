@@ -17,6 +17,12 @@
       <h2 id="product-meta-title-{{ section.id }}">{{ section.settings.heading | escape }}</h2>
     </div>
     <dl class="product-meta__grid">
+      {% if product.category != blank %}
+        <div class="product-meta__item">
+          <dt>Category</dt>
+          <dd>{{ product.category.name | default: product.category.full_name | escape }}</dd>
+        </div>
+      {% endif %}
       {% for block in section.blocks %}
         {% liquid
           assign namespace = block.settings.namespace | strip

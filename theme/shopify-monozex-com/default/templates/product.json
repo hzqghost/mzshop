@@ -34,13 +34,13 @@
           "type": "_product-media-gallery",
           "static": true,
           "settings": {
-            "media_presentation": "grid",
-            "media_columns": "two",
+            "media_presentation": "carousel",
+            "media_columns": "one",
             "image_gap": 4,
             "large_first_image": false,
-            "slideshow_controls_style": "counter",
+            "slideshow_controls_style": "thumbnails",
             "slideshow_mobile_controls_style": "dots",
-            "thumbnail_position": "right",
+            "thumbnail_position": "left",
             "thumbnail_width": 44,
             "thumbnail_radius": 0,
             "aspect_ratio": "adapt",
@@ -327,14 +327,16 @@
     "product_metafields": {
       "type": "product-metafields",
       "blocks": {
-        "fragrance_family": { "type": "metafield", "settings": { "label": "Fragrance family", "namespace": "shopify", "key": "fragrance-family" } },
+        "olfactory_family": { "type": "metafield", "settings": { "label": "Fragrance family", "namespace": "shopify", "key": "olfactory-family" } },
+        "season": { "type": "metafield", "settings": { "label": "Season", "namespace": "shopify", "key": "season" } },
+        "main_accords": { "type": "metafield", "settings": { "label": "Main accords", "namespace": "shopify", "key": "main-accords" } },
         "scent": { "type": "metafield", "settings": { "label": "Scent", "namespace": "shopify", "key": "scent" } },
         "product_form": { "type": "metafield", "settings": { "label": "Product form", "namespace": "shopify", "key": "product-form" } },
         "target_gender": { "type": "metafield", "settings": { "label": "For", "namespace": "shopify", "key": "target-gender" } },
         "size": { "type": "metafield", "settings": { "label": "Size", "namespace": "custom", "key": "size" } },
-        "country": { "type": "metafield", "settings": { "label": "Country of origin", "namespace": "custom", "key": "country_of_origin" } }
+        "country": { "type": "metafield", "settings": { "label": "Country of origin", "namespace": "shopify", "key": "country-of-origin" } }
       },
-      "block_order": ["fragrance_family", "scent", "product_form", "target_gender", "size", "country"],
+      "block_order": ["olfactory_family", "season", "main_accords", "scent", "product_form", "target_gender", "size", "country"],
       "settings": { "heading": "Product details" }
     },
     "product_recommendations_qggXJq": {

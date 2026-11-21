@@ -57,3 +57,10 @@
 - 删除商品：应用层先删除 Shopify task、variant map、product map。
 - 删除店铺：应用层先删除 Shopify task、variant map、product map、store config。
 - 删除本地记录不会主动删除 Shopify 远端商品；远端归档动作后续单独实现。
+
+## 7. 在线商店主题
+
+- `theme/shopify-monozex-com/default` 为默认在线商店主题源码；GitHub 的 `shopify-theme` 分支把该目录内容置于分支根目录供 Shopify 连接。
+- 商品页桌面媒体采用轮播和左侧缩略图；移动端保留主题原生分页。
+- 商品详情展示 Shopify 标准分类，以及已配置的标准类别元字段；不存在的字段自动隐藏。
+- 发布前执行 `shopify theme check --path theme/shopify-monozex-com/default`。
